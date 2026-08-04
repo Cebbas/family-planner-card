@@ -11,6 +11,23 @@ En egen Lovelace-card till Home Assistant med:
 
 ## Installation
 
+### Via HACS (rekommenderas)
+
+Kortet ligger inte i HACS standardlista, så det läggs till som ett
+**anpassat repository (custom repository)**:
+
+1. Öppna **HACS → tre punkter (uppe till höger) → Anpassade repositories**.
+2. Lägg till URL:en till detta repo:
+   `https://github.com/Cebbas/family-planner-card`
+   Kategori: **Dashboard** (Lovelace-kort).
+3. Sök upp "Family Planner Card" i HACS och klicka **Ladda ner**.
+4. HACS lägger automatiskt till resursen åt dig. Ladda om dashboarden
+   (eller starta om HA vid behov), lägg sedan till kortet.
+
+Framtida uppdateringar syns som vanligt i HACS när nya releaser skapas.
+
+### Manuellt
+
 1. Kopiera `family-planner-card.js` till `/config/www/` i din HA-installation
    (t.ex. via Samba/Studio Code Server som du redan använder).
 2. Lägg till den som resurs:

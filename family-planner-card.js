@@ -4,19 +4,20 @@
  * En egen Lovelace-card för Home Assistant.
  *
  * Övre delen ("Idag"):
- *   - En rad per person, som visar entitetens state (t.ex. en template-
- *     sensor du själv fyller med dagens text).
+ *   - En rad per person. Varje person kan ha flera `entities` (text-
+ *     sensorer) - varje sensor med ett icke-tomt state får sin egen rad
+ *     under personens namn.
  *   - En "allmän rad" med sensorer som bara visas som en rund ikon om
  *     entiteten är "on".
  *   Hela "Idag"-sektionen kan fällas ihop/ut.
  *
- * Nedre delen ("Veckoschema"):
- *   - Samma personer, en rad var, men uppdelat på veckans dagar
- *     (måndag-söndag). Dagens dag är markerad.
- *   - Cellinnehållet hämtas från attribut på en "week_entity" per person,
- *     där attributnamnen ska vara monday, tuesday, wednesday, thursday,
- *     friday, saturday, sunday (engelska, gemener). Saknas week_entity
- *     eller attribut visas ett streck.
+ * Vecka + månad:
+ *   - Samma `calendar_entity` per person driver både veckoschemat och
+ *     månadskalendern - ingen separat "week_entity" längre.
+ *   - Kalendrar som inte hör till en specifik person läggs under det
+ *     toppnivå-fältet `calendars` och samlas i en delad rad
+ *     (`calendars_label`) i veckoschemat, plus egna filter/prickar i
+ *     månadskalendern.
  *
  * -----------------------------------------------------------------------
  * Exempel-konfiguration:
@@ -24,16 +25,25 @@
  * type: custom:family-planner-card
  * title: Familjeplanering
  * persons:
- *   - name: Anna
- *     entity: sensor.anna_idag
- *     week_entity: sensor.anna_vecka   # valfri
+ *   - name: Anna                     # valfri om person_entity är satt
+ *     person_entity: person.anna     # valfri - hämtar namn+profilbild från HA
+ *     entities:                      # valfri lista, flera "idag"-sensorer
+ *       - sensor.anna_skola
+ *       - sensor.anna_fritids
+ *     calendar_entity: calendar.anna # driver både vecka och månad
  *     icon: mdi:account
- *     color: "#e17055"                # valfri, färg på avataren
+ *     color: "#e17055"               # valfri, färg på avatar/prickar
  *   - name: Erik
- *     entity: sensor.erik_idag
- *     week_entity: sensor.erik_vecka
+ *     entities:
+ *       - sensor.erik_idag
+ *     calendar_entity: calendar.erik
  *     icon: mdi:account
  *     color: "#0984e3"
+ * calendars:                          # kalendrar utan koppling till en person
+ *   - entity: calendar.familj
+ *     name: Familj
+ *     color: "#95a5a6"
+ * calendars_label: Övrigt             # radnamn för calendars i veckoschemat
  * general:
  *   - entity: binary_sensor.tvattmaskin
  *     name: Tvätt
@@ -156,7 +166,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._built = false;
     const today = new Date();
     this._calendarViewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    this._hiddenPersons = new Set();
+    this._hiddenSources = new Set();
     this._dragging = false;
     this._dragMoved = false;
     this._dragStart = null;
@@ -171,16 +181,34 @@ class FamilyPlannerCard extends HTMLElement {
     if (!Array.isArray(config.persons) || config.persons.length === 0) {
       throw new Error("Du måste ange minst en person under 'persons'");
     }
-    for (const p of config.persons) {
-      if (!p.entity) {
-        throw new Error(`Person "${p.name || "?"}" saknar 'entity'`);
+    const persons = config.persons.map((p) => {
+      if (!p.name && !p.person_entity) {
+        throw new Error("En person saknar både 'name' och 'person_entity'");
       }
-    }
+      return {
+        name: p.name || "",
+        person_entity: p.person_entity || null,
+        entities: Array.isArray(p.entities) ? p.entities : p.entities ? [p.entities] : [],
+        calendar_entity: p.calendar_entity || null,
+        icon: p.icon || "mdi:account",
+        color: p.color || null,
+      };
+    });
     const countdownCfg = config.countdowns || {};
     const weatherCfg = config.weather || {};
     this._config = {
       title: config.title || "Familjeplanering",
-      persons: config.persons,
+      persons,
+      calendars: Array.isArray(config.calendars)
+        ? config.calendars
+            .filter((c) => c && c.entity)
+            .map((c) => ({
+              entity: c.entity,
+              name: c.name || c.entity,
+              color: c.color || "var(--secondary-text-color)",
+            }))
+        : [],
+      calendars_label: config.calendars_label || "Övrigt",
       general: Array.isArray(config.general) ? config.general : [],
       start_collapsed: !!config.start_collapsed,
       countdowns: {
@@ -212,13 +240,61 @@ class FamilyPlannerCard extends HTMLElement {
     }
     this._maybeFetchForecast();
     this._maybeFetchMonthEvents();
+    this._maybeFetchWeekEvents();
+  }
+
+  // Alla kalenderkällor - personer med calendar_entity + fristående
+  // "calendars" som inte hör till en person - i ett enhetligt format som
+  // både veckoschemat och månadskalendern bygger på.
+  _calendarSources() {
+    const cfg = this._config;
+    if (!cfg) return [];
+    const personSources = cfg.persons
+      .filter((p) => p.calendar_entity)
+      .map((p) => ({
+        key: `person:${p.name}`,
+        name: this._personDisplay(p).name,
+        color: p.color || "var(--primary-color)",
+        calendar_entity: p.calendar_entity,
+        isPerson: true,
+      }));
+    const sharedSources = (cfg.calendars || []).map((c) => ({
+      key: `cal:${c.entity}`,
+      name: c.name,
+      color: c.color,
+      calendar_entity: c.entity,
+      isPerson: false,
+    }));
+    return [...personSources, ...sharedSources];
+  }
+
+  _startOfThisWeek() {
+    const today = new Date();
+    const idx = weekdayIndex(today);
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate() - idx);
+  }
+
+  async _fetchCalendarEvents(entityIds, start, end) {
+    const data = {};
+    for (const entityId of entityIds) {
+      try {
+        const events = await this._hass.callApi(
+          "GET",
+          `calendars/${entityId}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`
+        );
+        data[entityId] = Array.isArray(events) ? events : [];
+      } catch (err) {
+        data[entityId] = [];
+      }
+    }
+    return data;
   }
 
   async _maybeFetchMonthEvents() {
     const cfg = this._config;
     if (!cfg || !cfg.show_month_calendar || !this._hass) return;
-    const persons = cfg.persons.filter((p) => p.calendar_entity);
-    if (persons.length === 0) return;
+    const sources = this._calendarSources();
+    if (sources.length === 0) return;
 
     const year = this._calendarViewMonth.getFullYear();
     const month = this._calendarViewMonth.getMonth();
@@ -232,20 +308,32 @@ class FamilyPlannerCard extends HTMLElement {
     const gridEnd = new Date(gridStart);
     gridEnd.setDate(gridEnd.getDate() + 42);
 
-    const data = {};
-    for (const p of persons) {
-      try {
-        const events = await this._hass.callApi(
-          "GET",
-          `calendars/${p.calendar_entity}?start=${encodeURIComponent(gridStart.toISOString())}&end=${encodeURIComponent(gridEnd.toISOString())}`
-        );
-        data[p.calendar_entity] = Array.isArray(events) ? events : [];
-      } catch (err) {
-        data[p.calendar_entity] = [];
-      }
-    }
+    const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
+    const data = await this._fetchCalendarEvents(entityIds, gridStart, gridEnd);
     this._monthEventsCache = { key: monthKey, fetchedAt: Date.now(), data };
     this._monthEventsLoading = false;
+    this._update();
+  }
+
+  async _maybeFetchWeekEvents() {
+    const cfg = this._config;
+    if (!cfg || !this._hass) return;
+    const sources = this._calendarSources();
+    if (sources.length === 0) return;
+
+    const monday = this._startOfThisWeek();
+    const weekKey = isoDate(monday);
+    const cache = this._weekEventsCache;
+    const fresh = cache && cache.key === weekKey && Date.now() - cache.fetchedAt < 5 * 60 * 1000;
+    if (fresh || this._weekEventsLoading) return;
+
+    this._weekEventsLoading = true;
+    const end = new Date(monday);
+    end.setDate(end.getDate() + 7);
+    const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
+    const data = await this._fetchCalendarEvents(entityIds, monday, end);
+    this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), data };
+    this._weekEventsLoading = false;
     this._update();
   }
 
@@ -279,8 +367,10 @@ class FamilyPlannerCard extends HTMLElement {
   }
 
   getCardSize() {
-    const persons = this._config ? this._config.persons.length : 1;
-    return 3 + persons;
+    const cfg = this._config;
+    const persons = cfg ? cfg.persons.length : 1;
+    const sharedRow = cfg && cfg.calendars && cfg.calendars.length > 0 ? 1 : 0;
+    return 3 + persons + sharedRow;
   }
 
   _stateObj(entityId) {
@@ -295,6 +385,26 @@ class FamilyPlannerCard extends HTMLElement {
       return fallback || "Inget planerat idag";
     }
     return st.state;
+  }
+
+  // Namn + ev. profilbild för en person - hämtas från person_entity i HA
+  // om satt (friendly_name/entity_picture), annars det manuellt satta namnet.
+  _personDisplay(p) {
+    const st = p.person_entity ? this._stateObj(p.person_entity) : undefined;
+    const name = p.name || (st && st.attributes.friendly_name) || p.person_entity || "?";
+    const picture = st && st.attributes.entity_picture ? st.attributes.entity_picture : null;
+    return { name, picture };
+  }
+
+  // Text-rader för "Idag" - en rad per entitet i p.entities med ett
+  // "riktigt" state. Om alla är tomma/okonfigurerade visas en enda
+  // placeholder-rad istället för flera identiska "Inget planerat idag".
+  _personTodayLines(p) {
+    const ids = Array.isArray(p.entities) ? p.entities : [];
+    if (ids.length === 0) return ["Inget planerat idag"];
+    const texts = ids.map((eid) => this._friendlyState(eid));
+    const real = texts.filter((t) => t !== "Inget planerat idag");
+    return real.length > 0 ? real : ["Inget planerat idag"];
   }
 
   _todayKey() {
@@ -335,11 +445,12 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-avatar {
           width: 36px; height: 36px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
-          flex-shrink: 0; color: white;
+          flex-shrink: 0; color: white; overflow: hidden;
         }
-        .fpc-person-info { display: flex; flex-direction: column; min-width: 0; }
+        .fpc-avatar-img { width: 100%; height: 100%; object-fit: cover; }
+        .fpc-person-info { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
         .fpc-person-name { font-weight: 500; font-size: 0.95em; }
-        .fpc-person-state {
+        .fpc-person-state-line {
           color: var(--secondary-text-color); font-size: 0.88em;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
@@ -615,7 +726,10 @@ class FamilyPlannerCard extends HTMLElement {
   _speakToday() {
     const cfg = this._config;
     if (!cfg.tts || !this._hass) return;
-    const parts = cfg.persons.map((p) => `${p.name}: ${this._friendlyState(p.entity)}`);
+    const parts = cfg.persons.map((p) => {
+      const { name } = this._personDisplay(p);
+      return `${name}: ${this._personTodayLines(p).join(", ")}`;
+    });
     const activeGeneral = cfg.general.filter((g) => {
       const st = this._stateObj(g.entity);
       return st && st.state === "on";
@@ -633,20 +747,51 @@ class FamilyPlannerCard extends HTMLElement {
       .catch(() => {});
   }
 
+  // Rader för en veckodag från en uppsättning kalenderkällor (redan
+  // filtrerat på _hiddenSources) - delas mellan veckotabellen och delningen.
+  _weekDayEvents(sources, dateIso) {
+    return this._eventsForDateFromSources(dateIso, this._weekEventsCache, sources).filter(
+      (ev) => !this._hiddenSources.has(ev.sourceKey)
+    );
+  }
+
+  _weekDates() {
+    const monday = this._startOfThisWeek();
+    return DAY_KEYS.map((_, i) => {
+      const d = new Date(monday);
+      d.setDate(d.getDate() + i);
+      return isoDate(d);
+    });
+  }
+
   _shareWeek() {
     const cfg = this._config;
     const todayIdx = this._todayKey();
+    const weekDates = this._weekDates();
+    const sources = this._calendarSources();
     const lines = [cfg.title, ""];
+
     cfg.persons.forEach((p) => {
-      const weekState = p.week_entity ? this._stateObj(p.week_entity) : undefined;
-      const attrs = weekState ? weekState.attributes : {};
-      lines.push(p.name + ":");
-      DAY_KEYS.forEach((key, i) => {
-        const val = attrs && attrs[key] ? attrs[key] : "–";
+      const { name } = this._personDisplay(p);
+      const src = sources.find((s) => s.key === `person:${p.name}`);
+      lines.push(name + ":");
+      weekDates.forEach((dateIso, i) => {
+        const events = src ? this._weekDayEvents([src], dateIso) : [];
+        const val = events.length > 0 ? events.map((ev) => ev.summary || "(utan titel)").join(", ") : "–";
         lines.push(`  ${DAY_LABELS[i]}${i === todayIdx ? " (idag)" : ""}: ${val}`);
       });
       lines.push("");
     });
+
+    const sharedSources = sources.filter((s) => !s.isPerson);
+    if (sharedSources.length > 0) {
+      lines.push(cfg.calendars_label + ":");
+      weekDates.forEach((dateIso, i) => {
+        const events = this._weekDayEvents(sharedSources, dateIso);
+        const val = events.length > 0 ? events.map((ev) => ev.summary || "(utan titel)").join(", ") : "–";
+        lines.push(`  ${DAY_LABELS[i]}${i === todayIdx ? " (idag)" : ""}: ${val}`);
+      });
+    }
     const text = lines.join("\n");
 
     if (navigator.share) {
@@ -744,16 +889,24 @@ class FamilyPlannerCard extends HTMLElement {
         .map((p) => {
           const color = p.color || "var(--primary-color)";
           const icon = p.icon || "mdi:account";
-          const stateText = this._friendlyState(p.entity);
-          const badge = renderIconBadge(matchIcon(stateText, cfg.icon_keywords));
+          const { name, picture } = this._personDisplay(p);
+          const avatarInner = picture
+            ? `<img class="fpc-avatar-img" src="${picture}" alt="" />`
+            : `<ha-icon icon="${icon}"></ha-icon>`;
+          const lines = this._personTodayLines(p)
+            .map((text) => {
+              const badge = renderIconBadge(matchIcon(text, cfg.icon_keywords));
+              return `<div class="fpc-person-state-line">${badge}${fpcEsc(text)}</div>`;
+            })
+            .join("");
           return `
             <div class="fpc-person-row">
-              <div class="fpc-avatar" style="background:${color}">
-                <ha-icon icon="${icon}"></ha-icon>
+              <div class="fpc-avatar" style="background:${picture ? "transparent" : color}">
+                ${avatarInner}
               </div>
               <div class="fpc-person-info">
-                <div class="fpc-person-name">${fpcEsc(p.name)}</div>
-                <div class="fpc-person-state">${badge}${fpcEsc(stateText)}</div>
+                <div class="fpc-person-name">${fpcEsc(name)}</div>
+                ${lines}
               </div>
             </div>
           `;
@@ -836,47 +989,75 @@ class FamilyPlannerCard extends HTMLElement {
         weatherWeekRow = `<tr class="fpc-weather-week-row"><td class="fpc-person-col"></td>${cells}</tr>`;
       }
 
+      const weekDates = this._weekDates();
+      const sources = this._calendarSources();
+      const renderWeekCell = (events, isToday) => {
+        if (events.length === 0) {
+          return `<td class="${isToday ? "fpc-today-col" : ""}">–</td>`;
+        }
+        const html = events
+          .map((ev) => {
+            const summary = ev.summary || "(utan titel)";
+            const badge = renderIconBadge(matchIcon(summary, cfg.icon_keywords));
+            return `${badge}${fpcEsc(summary)}`;
+          })
+          .join(" • ");
+        return `<td class="${isToday ? "fpc-today-col" : ""}">${html}</td>`;
+      };
+
       const rows = cfg.persons
         .map((p) => {
-          const weekState = p.week_entity ? this._stateObj(p.week_entity) : undefined;
-          const attrs = weekState ? weekState.attributes : {};
-          const cells = DAY_KEYS.map((key, i) => {
-            const val = attrs && attrs[key] ? attrs[key] : "–";
-            const badge = renderIconBadge(matchIcon(val, cfg.icon_keywords));
-            return `<td class="${i === todayIdx ? "fpc-today-col" : ""}">${badge}${fpcEsc(val)}</td>`;
-          }).join("");
-          return `<tr><td class="fpc-person-col">${fpcEsc(p.name)}</td>${cells}</tr>`;
+          const { name } = this._personDisplay(p);
+          const src = sources.find((s) => s.key === `person:${p.name}`);
+          const cells = weekDates
+            .map((dateIso, i) => {
+              const events = src ? this._weekDayEvents([src], dateIso) : [];
+              return renderWeekCell(events, i === todayIdx);
+            })
+            .join("");
+          return `<tr><td class="fpc-person-col">${fpcEsc(name)}</td>${cells}</tr>`;
         })
         .join("");
 
+      const sharedSources = sources.filter((s) => !s.isPerson);
+      let sharedRow = "";
+      if (sharedSources.length > 0) {
+        const cells = weekDates
+          .map((dateIso, i) => renderWeekCell(this._weekDayEvents(sharedSources, dateIso), i === todayIdx))
+          .join("");
+        sharedRow = `<tr><td class="fpc-person-col">${fpcEsc(cfg.calendars_label)}</td>${cells}</tr>`;
+      }
+
       tableEl.innerHTML = `
         <thead><tr><th></th>${headerCells}</tr></thead>
-        <tbody>${weatherWeekRow}${rows}</tbody>
+        <tbody>${weatherWeekRow}${rows}${sharedRow}</tbody>
       `;
     }
 
     this._updateMonthCalendar();
   }
 
-  _eventsForDate(dateIso) {
-    // Samlar alla events för ett datum över alla personer med calendar_entity.
-    const cfg = this._config;
-    const cache = this._monthEventsCache;
+  // Samlar events för ett datum från en given cache (månad/vecka) över en
+  // lista kalenderkällor (se _calendarSources).
+  _eventsForDateFromSources(dateIso, cache, sources) {
     const results = [];
     if (!cache) return results;
-    cfg.persons.forEach((p) => {
-      if (!p.calendar_entity) return;
-      const events = cache.data[p.calendar_entity] || [];
+    sources.forEach((src) => {
+      const events = cache.data[src.calendar_entity] || [];
       events.forEach((ev) => {
         const start = ev.start && (ev.start.dateTime || ev.start.date);
         if (!start) return;
         const evDate = isoDate(new Date(start));
         if (evDate === dateIso) {
-          results.push({ ...ev, personName: p.name, personColor: p.color || "var(--primary-color)" });
+          results.push({ ...ev, sourceKey: src.key, sourceName: src.name, sourceColor: src.color });
         }
       });
     });
     return results;
+  }
+
+  _eventsForDate(dateIso) {
+    return this._eventsForDateFromSources(dateIso, this._monthEventsCache, this._calendarSources());
   }
 
   _vacationColorForDate(dateIso, allEvents) {
@@ -927,8 +1108,10 @@ class FamilyPlannerCard extends HTMLElement {
         { entity_id: targetEntity }
       );
       this._monthEventsCache = null;
+      this._weekEventsCache = null;
       this._creatingEvent = null;
       await this._maybeFetchMonthEvents();
+      await this._maybeFetchWeekEvents();
       this._update();
     } catch (err) {
       // Går inte att skapa (t.ex. skrivskyddad kalender) - lämna formuläret öppet
@@ -945,33 +1128,33 @@ class FamilyPlannerCard extends HTMLElement {
     }
     section.style.display = "";
 
-    const calendarPersons = cfg.persons.filter((p) => p.calendar_entity);
+    const sources = this._calendarSources();
 
     const year = this._calendarViewMonth.getFullYear();
     const month = this._calendarViewMonth.getMonth();
     this.querySelector("#fpc-month-title").textContent = `${MONTH_NAMES[month]} ${year}`;
 
-    // Filter-chips per person
+    // Filter-chips per kalenderkälla (person eller delad kalender)
     const filtersEl = this.querySelector("#fpc-month-filters");
-    if (calendarPersons.length === 0) {
+    if (sources.length === 0) {
       filtersEl.innerHTML = "";
     } else {
-      filtersEl.innerHTML = calendarPersons
-        .map((p) => {
-          const active = !this._hiddenPersons.has(p.name);
+      filtersEl.innerHTML = sources
+        .map((src) => {
+          const active = !this._hiddenSources.has(src.key);
           return `
-            <div class="fpc-filter-chip${active ? " fpc-filter-active" : ""}" data-person="${fpcEsc(p.name)}">
-              <div class="fpc-filter-dot" style="background:${p.color || "var(--primary-color)"}"></div>
-              ${fpcEsc(p.name)}
+            <div class="fpc-filter-chip${active ? " fpc-filter-active" : ""}" data-source-key="${fpcEsc(src.key)}">
+              <div class="fpc-filter-dot" style="background:${src.color}"></div>
+              ${fpcEsc(src.name)}
             </div>
           `;
         })
         .join("");
       filtersEl.querySelectorAll(".fpc-filter-chip").forEach((chip) => {
         chip.addEventListener("click", () => {
-          const name = chip.getAttribute("data-person");
-          if (this._hiddenPersons.has(name)) this._hiddenPersons.delete(name);
-          else this._hiddenPersons.add(name);
+          const key = chip.getAttribute("data-source-key");
+          if (this._hiddenSources.has(key)) this._hiddenSources.delete(key);
+          else this._hiddenSources.add(key);
           this._updateMonthCalendar();
         });
       });
@@ -1000,11 +1183,11 @@ class FamilyPlannerCard extends HTMLElement {
       const isSelected = this._selectedDate === dIso;
       const isDragHighlighted = dragMin && dIso >= dragMin && dIso <= dragMax;
       const allEvents = this._eventsForDate(dIso);
-      const visibleEvents = allEvents.filter((ev) => !this._hiddenPersons.has(ev.personName));
+      const visibleEvents = allEvents.filter((ev) => !this._hiddenSources.has(ev.sourceKey));
       const vacationColor = this._vacationColorForDate(dIso, allEvents);
       const dots = visibleEvents
         .slice(0, 6)
-        .map((ev) => `<div class="fpc-month-dot" style="background:${ev.personColor}"></div>`)
+        .map((ev) => `<div class="fpc-month-dot" style="background:${ev.sourceColor}"></div>`)
         .join("");
       const classes = [
         "fpc-month-cell",
@@ -1052,7 +1235,7 @@ class FamilyPlannerCard extends HTMLElement {
     const cfg = this._config;
     const detailEl = this.querySelector("#fpc-month-daydetail");
     if (!detailEl) return;
-    const calendarPersons = cfg.persons.filter((p) => p.calendar_entity);
+    const sources = this._calendarSources();
 
     if (this._creatingEvent) {
       const { startIso, endIso } = this._creatingEvent;
@@ -1065,7 +1248,7 @@ class FamilyPlannerCard extends HTMLElement {
           <div class="fpc-month-daydetail-title">Ny händelse: ${label}</div>
           <input type="text" id="fpc-new-event-title" placeholder="Titel, t.ex. Fotbollsträning" />
           <select id="fpc-new-event-target">
-            ${calendarPersons.map((p) => `<option value="${fpcEsc(p.calendar_entity)}">${fpcEsc(p.name)}</option>`).join("")}
+            ${sources.map((src) => `<option value="${fpcEsc(src.calendar_entity)}">${fpcEsc(src.name)}</option>`).join("")}
           </select>
           <div class="fpc-create-form-actions">
             <button class="fpc-create-cancel" id="fpc-create-cancel">Avbryt</button>
@@ -1092,7 +1275,7 @@ class FamilyPlannerCard extends HTMLElement {
       return;
     }
     const events = this._eventsForDate(this._selectedDate).filter(
-      (ev) => !this._hiddenPersons.has(ev.personName)
+      (ev) => !this._hiddenSources.has(ev.sourceKey)
     );
     const dateLabel = new Date(this._selectedDate).toLocaleDateString("sv-SE", {
       weekday: "long",
@@ -1109,14 +1292,14 @@ class FamilyPlannerCard extends HTMLElement {
           const badge = renderIconBadge(matchIcon(summary, cfg.icon_keywords));
           return `
             <div class="fpc-month-event">
-              <div class="fpc-month-event-dot" style="background:${ev.personColor}"></div>
-              <div>${badge}${fpcEsc(summary)} <span style="opacity:0.7">– ${fpcEsc(ev.personName)}</span></div>
+              <div class="fpc-month-event-dot" style="background:${ev.sourceColor}"></div>
+              <div>${badge}${fpcEsc(summary)} <span style="opacity:0.7">– ${fpcEsc(ev.sourceName)}</span></div>
             </div>
           `;
         })
         .join("");
     }
-    if (calendarPersons.length > 0) {
+    if (sources.length > 0) {
       html += `<button class="fpc-add-event-btn" id="fpc-add-event-btn">+ Lägg till händelse</button>`;
     }
     detailEl.innerHTML = html;
@@ -1143,7 +1326,9 @@ class FamilyPlannerCard extends HTMLElement {
       show_month_calendar: true,
       vacation_keywords: [],
       tts: null,
-      persons: [{ name: "Person 1", entity: "" }],
+      persons: [{ name: "Person 1", entities: [] }],
+      calendars: [],
+      calendars_label: "Övrigt",
       general: [],
     };
   }
@@ -1183,7 +1368,20 @@ class FamilyPlannerCardEditor extends HTMLElement {
         tts_entity: (config.tts && config.tts.tts_entity) || "",
         media_player: (config.tts && config.tts.media_player) || "",
       },
-      persons: config.persons || [],
+      persons: (config.persons || []).map((p) => ({
+        name: p.name || "",
+        person_entity: p.person_entity || "",
+        entities: Array.isArray(p.entities) ? p.entities : [],
+        calendar_entity: p.calendar_entity || "",
+        icon: p.icon || "",
+        color: p.color || "",
+      })),
+      calendars: (config.calendars || []).map((c) => ({
+        entity: c.entity || "",
+        name: c.name || "",
+        color: c.color || "",
+      })),
+      calendars_label: config.calendars_label || "Övrigt",
       general: config.general || [],
     };
     this._render();
@@ -1207,12 +1405,13 @@ class FamilyPlannerCardEditor extends HTMLElement {
     );
   }
 
-  _mkEntityPicker(value, onChange, placeholder) {
+  _mkEntityPicker(value, onChange, placeholder, includeDomains) {
     if (customElements.get("ha-entity-picker")) {
       const picker = document.createElement("ha-entity-picker");
       picker.hass = this._hass;
       picker.value = value || "";
       picker.allowCustomEntity = true;
+      if (includeDomains && includeDomains.length) picker.includeDomains = includeDomains;
       picker.style.flex = "1";
       picker.addEventListener("value-changed", (ev) => {
         ev.stopPropagation();
@@ -1235,6 +1434,49 @@ class FamilyPlannerCardEditor extends HTMLElement {
     row.className = "fpce-row";
     children.forEach((c) => row.appendChild(c));
     return row;
+  }
+
+  // Nästlad, ombyggbar lista med "idag"-sensorer för en person - varje
+  // sensor med icke-tomt state blir en egen rad i Idag-vyn.
+  _personEntitiesList(p, idx) {
+    const wrap = document.createElement("div");
+    const label = document.createElement("div");
+    label.className = "fpce-label";
+    label.textContent = "Idag-sensorer (en rad per sensor i Idag-vyn)";
+    wrap.appendChild(label);
+
+    const entities = Array.isArray(p.entities) ? p.entities : [];
+    entities.forEach((eid, eIdx) => {
+      const picker = this._mkEntityPicker(eid, (val) => {
+        const persons = [...this._config.persons];
+        const list = [...(persons[idx].entities || [])];
+        list[eIdx] = val;
+        persons[idx] = { ...persons[idx], entities: list };
+        this._config = { ...this._config, persons };
+        this._fireChanged();
+      });
+      const removeBtn = this._removeBtn(() => {
+        const persons = [...this._config.persons];
+        const list = (persons[idx].entities || []).filter((_, i) => i !== eIdx);
+        persons[idx] = { ...persons[idx], entities: list };
+        this._config = { ...this._config, persons };
+        this._fireChanged();
+        this._render();
+      });
+      wrap.appendChild(this._row([picker, removeBtn]));
+    });
+
+    wrap.appendChild(
+      this._addBtn("+ Lägg till sensor", () => {
+        const persons = [...this._config.persons];
+        const list = [...(persons[idx].entities || []), ""];
+        persons[idx] = { ...persons[idx], entities: list };
+        this._config = { ...this._config, persons };
+        this._fireChanged();
+        this._render();
+      })
+    );
+    return wrap;
   }
 
   _textInput(value, placeholder, onChange, widthCss) {
@@ -1345,6 +1587,11 @@ class FamilyPlannerCardEditor extends HTMLElement {
           <div id="fpce-person-list"></div>
         </div>
         <div class="fpce-section">
+          <div class="fpce-section-title">Delade kalendrar (hör inte till en specifik person)</div>
+          <div class="fpce-row" id="fpce-calendars-label-row"></div>
+          <div id="fpce-calendar-list"></div>
+        </div>
+        <div class="fpce-section">
           <div class="fpce-section-title">Allmänna sensorer (visas som rund ikon när "on")</div>
           <div id="fpce-general-list"></div>
         </div>
@@ -1447,7 +1694,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
       this._mkEntityPicker(cfg.weather.entity, (val) => {
         this._config = { ...this._config, weather: { ...this._config.weather, entity: val } };
         this._fireChanged();
-      })
+      }, null, ["weather"])
     );
     this.querySelector("#fpce-weather-entity-row").appendChild(weatherEntityField);
 
@@ -1587,7 +1834,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
       this._mkEntityPicker(cfg.tts.tts_entity, (val) => {
         this._config = { ...this._config, tts: { ...this._config.tts, tts_entity: val } };
         this._fireChanged();
-      })
+      }, null, ["tts"])
     );
     this.querySelector("#fpce-tts-entity-row").appendChild(ttsEntityField);
 
@@ -1598,7 +1845,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
       this._mkEntityPicker(cfg.tts.media_player, (val) => {
         this._config = { ...this._config, tts: { ...this._config.tts, media_player: val } };
         this._fireChanged();
-      })
+      }, null, ["media_player"])
     );
     this.querySelector("#fpce-tts-player-row").appendChild(ttsPlayerField);
 
@@ -1620,40 +1867,28 @@ class FamilyPlannerCardEditor extends HTMLElement {
         })
       );
 
-      const entityField = document.createElement("div");
-      entityField.className = "fpce-field";
-      entityField.innerHTML = `<div class="fpce-label">Entitet (idag-text)</div>`;
-      entityField.appendChild(
-        this._mkEntityPicker(p.entity, (val) => {
+      const personEntityField = document.createElement("div");
+      personEntityField.className = "fpce-field";
+      personEntityField.innerHTML = `<div class="fpce-label">Koppla till HA-person (valfri - hämtar namn + profilbild)</div>`;
+      personEntityField.appendChild(
+        this._mkEntityPicker(p.person_entity, (val) => {
           const persons = [...this._config.persons];
-          persons[idx] = { ...persons[idx], entity: val };
+          persons[idx] = { ...persons[idx], person_entity: val };
           this._config = { ...this._config, persons };
           this._fireChanged();
-        })
-      );
-
-      const weekField = document.createElement("div");
-      weekField.className = "fpce-field";
-      weekField.innerHTML = `<div class="fpce-label">Vecko-entitet (valfri)</div>`;
-      weekField.appendChild(
-        this._mkEntityPicker(p.week_entity, (val) => {
-          const persons = [...this._config.persons];
-          persons[idx] = { ...persons[idx], week_entity: val };
-          this._config = { ...this._config, persons };
-          this._fireChanged();
-        })
+        }, "person.namn", ["person"])
       );
 
       const calField = document.createElement("div");
       calField.className = "fpce-field";
-      calField.innerHTML = `<div class="fpce-label">Kalender-entitet för månadsvyn (valfri, calendar.*)</div>`;
+      calField.innerHTML = `<div class="fpce-label">Kalender (används för både veckoschema och månadsvy)</div>`;
       calField.appendChild(
         this._mkEntityPicker(p.calendar_entity, (val) => {
           const persons = [...this._config.persons];
           persons[idx] = { ...persons[idx], calendar_entity: val };
           this._config = { ...this._config, persons };
           this._fireChanged();
-        })
+        }, null, ["calendar"])
       );
 
       const removeBtn = this._removeBtn(() => {
@@ -1664,8 +1899,8 @@ class FamilyPlannerCardEditor extends HTMLElement {
       });
 
       card.appendChild(this._row([nameField, removeBtn]));
-      card.appendChild(this._row([entityField]));
-      card.appendChild(this._row([weekField]));
+      card.appendChild(this._row([personEntityField]));
+      card.appendChild(this._personEntitiesList(p, idx));
       card.appendChild(this._row([calField]));
 
       const iconInput = this._textInput(p.icon, "mdi:account", (val) => {
@@ -1689,8 +1924,74 @@ class FamilyPlannerCardEditor extends HTMLElement {
     });
     personListEl.appendChild(
       this._addBtn("+ Lägg till person", () => {
-        const persons = [...this._config.persons, { name: "", entity: "" }];
+        const persons = [...this._config.persons, { name: "", entities: [] }];
         this._config = { ...this._config, persons };
+        this._fireChanged();
+        this._render();
+      })
+    );
+
+    // Delade kalendrar (hör inte till en person)
+    const calLabelField = document.createElement("div");
+    calLabelField.className = "fpce-field";
+    calLabelField.innerHTML = `<div class="fpce-label">Radnamn i veckoschemat</div>`;
+    calLabelField.appendChild(
+      this._textInput(cfg.calendars_label, "Övrigt", (val) => {
+        this._config = { ...this._config, calendars_label: val };
+        this._fireChanged();
+      })
+    );
+    this.querySelector("#fpce-calendars-label-row").appendChild(calLabelField);
+
+    const calListEl = this.querySelector("#fpce-calendar-list");
+    cfg.calendars.forEach((c, idx) => {
+      const card = document.createElement("div");
+      card.className = "fpce-item-card";
+
+      const entityField = document.createElement("div");
+      entityField.className = "fpce-field";
+      entityField.innerHTML = `<div class="fpce-label">Kalender-entitet</div>`;
+      entityField.appendChild(
+        this._mkEntityPicker(c.entity, (val) => {
+          const calendars = [...this._config.calendars];
+          calendars[idx] = { ...calendars[idx], entity: val };
+          this._config = { ...this._config, calendars };
+          this._fireChanged();
+        }, "calendar.familj", ["calendar"])
+      );
+
+      const nameInput = this._textInput(c.name, "Namn", (val) => {
+        const calendars = [...this._config.calendars];
+        calendars[idx] = { ...calendars[idx], name: val };
+        this._config = { ...this._config, calendars };
+        this._fireChanged();
+      }, "140px");
+
+      const colorInput = document.createElement("input");
+      colorInput.type = "color";
+      colorInput.value = /^#[0-9a-fA-F]{6}$/.test(c.color) ? c.color : "#95a5a6";
+      colorInput.addEventListener("change", (ev) => {
+        const calendars = [...this._config.calendars];
+        calendars[idx] = { ...calendars[idx], color: ev.target.value };
+        this._config = { ...this._config, calendars };
+        this._fireChanged();
+      });
+
+      const removeBtn = this._removeBtn(() => {
+        const calendars = this._config.calendars.filter((_, i) => i !== idx);
+        this._config = { ...this._config, calendars };
+        this._fireChanged();
+        this._render();
+      });
+
+      card.appendChild(this._row([entityField]));
+      card.appendChild(this._row([nameInput, colorInput, removeBtn]));
+      calListEl.appendChild(card);
+    });
+    calListEl.appendChild(
+      this._addBtn("+ Lägg till kalender", () => {
+        const calendars = [...this._config.calendars, { entity: "", name: "", color: "#95a5a6" }];
+        this._config = { ...this._config, calendars };
         this._fireChanged();
         this._render();
       })
@@ -1711,7 +2012,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
           general[idx] = { ...general[idx], entity: val };
           this._config = { ...this._config, general };
           this._fireChanged();
-        })
+        }, null, ["binary_sensor"])
       );
 
       const nameInput = this._textInput(g.name, "Namn", (val) => {

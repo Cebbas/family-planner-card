@@ -2,6 +2,35 @@
 
 Idéer för vidare utveckling, inte implementerade än.
 
+## Flera "idag"-sensorer per person
+✅ Klar. `entities` (lista) ersätter det gamla `entity`-fältet — varje
+sensor med ett icke-tomt state får sin egen rad under personens namn i
+Idag-vyn.
+
+## Enhetlig kalenderkälla för vecka + månad
+✅ Klar. `week_entity` är borttaget. Veckoschemat läser numera samma
+`calendar_entity` som månadskalendern, hämtat via HA:s kalender-API för
+innevarande vecka (cachat 5 min, separat cache från månadsvyn).
+
+## Delade kalendrar utan koppling till en person
+✅ Klar. Toppnivå-fältet `calendars` (entity/name/color) syns som egna
+filter/prickar i månadskalendern och samlas i en gemensam rad
+(`calendars_label`) i veckoschemat.
+
+## Koppling till HA:s person.*-entiteter
+✅ Klar. `person_entity` per person hämtar namn (`friendly_name`) och
+profilbild (`entity_picture`) automatiskt istället för manuellt
+namn/ikon, med fallback till mdi-ikon om ingen bild finns.
+
+## Sidopanel för central konfiguration
+Diskuterat men inte påbörjat: en egen sida i HA:s sidopanel (registrerad
+via `panel_custom`) där man sätter upp personer/kalendrar/sensorer på ett
+ställe. Kräver antingen att panelen fortsätter redigera samma
+Lovelace-kort-YAML (då är den bara en rymligare variant av dagens
+in-dialog-editor), eller att konfigurationen flyttas till en delad
+lagringsplats (t.ex. en HA-helper) som flera kort kan läsa från — det
+senare är en större arkitekturändring och behöver beslutas separat.
+
 ## Månadskalender
 ✅ Klar. En riktig kalender i månadsvy under veckoschemat (`show_month_calendar`),
 öppnas alltid på innevarande månad, med `‹`/`›`-navigering och en

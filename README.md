@@ -2,12 +2,20 @@
 
 En egen Lovelace-card till Home Assistant med:
 
-- **Idag** (fällbar sektion): en rad per person som visar en entitets state
-  (t.ex. en template-sensor du fyller med dagens text), plus en **allmän
-  rad** med sensorer som bara syns som runda ikoner när de är `on`.
+- **Idag** (fällbar sektion): en eller flera rader per person, en per
+  konfigurerad `entities`-sensor (t.ex. en template-sensor du fyller med
+  dagens text), plus en **allmän rad** med sensorer som bara syns som
+  runda ikoner när de är `on`.
 - **Veckoschema**: samma personer, en rad var, uppdelat på veckans dagar.
-  Dagens dag markeras. Innehållet i varje ruta hämtas från attribut på en
-  valfri `week_entity` per person.
+  Dagens dag markeras. Innehållet hämtas direkt från personens
+  `calendar_entity` — samma kalender som driver månadsvyn. Kalendrar som
+  inte hör till en person (t.ex. en delad familjekalender) samlas i en
+  extra delad rad.
+
+> **Uppgraderar du från en äldre version?** Se
+> [Uppgradera från tidigare version](#uppgradera-från-tidigare-version)
+> längst ner — `entity` har blivit `entities` (lista) och `week_entity` är
+> borttaget till förmån för `calendar_entity`.
 
 ## Installation
 
@@ -70,18 +78,25 @@ tts:
   tts_entity: tts.piper     # entitet av typen tts.*
   media_player: media_player.kok  # högtalaren uppläsningen skickas till
 persons:
-  - name: Anna
-    entity: sensor.anna_idag
-    week_entity: sensor.anna_vecka
-    calendar_entity: calendar.anna   # valfri, används av månadskalendern
+  - name: Anna                     # valfri om person_entity är satt
+    person_entity: person.anna     # valfri - hämtar namn + profilbild från HA
+    entities:                      # valfri lista, en rad per sensor i Idag-vyn
+      - sensor.anna_skola
+      - sensor.anna_fritids
+    calendar_entity: calendar.anna # driver både vecka och månad
     icon: mdi:account
     color: "#e17055"
   - name: Erik
-    entity: sensor.erik_idag
-    week_entity: sensor.erik_vecka
+    entities:
+      - sensor.erik_idag
     calendar_entity: calendar.erik
     icon: mdi:account
     color: "#0984e3"
+calendars:                          # kalendrar utan koppling till en person
+  - entity: calendar.familj
+    name: Familj
+    color: "#95a5a6"
+calendars_label: Övrigt             # radnamn för "calendars" i veckoschemat
 general:
   - entity: binary_sensor.tvattmaskin
     name: Tvätt
@@ -167,18 +182,43 @@ standard (`show_month_calendar: true`). Bläddra mellan månader med `‹`/`›`
 — den öppnas alltid på innevarande månad.
 
 Lägg till `calendar_entity` (en vanlig `calendar.*`-entitet) på de
-personer du vill se i kalendern. Det är en annan entitet än `entity`/
-`week_entity` — de senare är fria textsensorer du själv fyller i, medan
+personer du vill se i kalendern. Det är en annan sorts källa än
+`entities` — de senare är fria textsensorer du själv fyller i, medan
 `calendar_entity` är en riktig kalender som kortet hämtar events från
 direkt via Home Assistants kalender-API (fungerar utmärkt med t.ex. en
-sammanslagen cal_combiner-kalender).
+sammanslagen cal_combiner-kalender). **Samma `calendar_entity` driver
+både veckoschemat och månadskalendern** — ingen separat vecko-sensor
+behövs längre.
 
-Varje dag i rutnätet visar en liten prick per person som har en händelse
-den dagen, i personens `color`. Klicka på en dag för att se en lista med
-den dagens händelser (tid, titel och person). Ikon-nyckelorden
+Varje dag i rutnätet visar en liten prick per person/kalender som har en
+händelse den dagen, i respektive `color`. Klicka på en dag för att se en
+lista med den dagens händelser (tid, titel och person). Ikon-nyckelorden
 (`icon_keywords`) matchas även mot händelsetitlarna i den listan.
 
-Data hämtas per synlig månad och cachas i 5 minuter.
+Data hämtas per synlig månad (och separat för innevarande vecka, till
+veckoschemat) och cachas i 5 minuter.
+
+## Delade kalendrar (utan koppling till en person)
+
+Kalendrar som inte hör till en specifik person — en gemensam
+familjekalender, sopschema, eller liknande — läggs under toppnivå-fältet
+`calendars`:
+
+```yaml
+calendars:
+  - entity: calendar.familj
+    name: Familj
+    color: "#95a5a6"
+  - entity: calendar.sopor
+    name: Sopor
+    color: "#5f9ea0"
+calendars_label: Övrigt   # radnamn i veckoschemat, default "Övrigt"
+```
+
+Alla kalendrar i listan visas i månadskalendern precis som personers
+kalendrar (egna filter-chips och prickar), men i veckoschemat samlas de
+i **en enda delad rad** (namnet styrs av `calendars_label`) istället för
+en rad var.
 
 ## Notis-badge i headern
 
@@ -211,18 +251,20 @@ Matchas mot alla händelsers titlar den dagen (över alla personers
 kalendrar), och om något matchar färgas hela dagcellen i månadskalendern
 med den färgen — bra för att visa skolans lovdagar direkt i vyn.
 
-## Filtrera månadskalendern per person
+## Filtrera kalendrar (vecka + månad)
 
 Ovanför kalenderrutnätet visas klickbara chips, en per person med
-`calendar_entity`. Klick döljer/visar den personens prickar och händelser
-i kalendern (inklusive dagsdetalj-listan) — påverkar inte
-semestermarkeringen, som alltid tar hänsyn till alla personers kalendrar.
+`calendar_entity` samt en per post i `calendars`. Klick döljer/visar den
+källans prickar och händelser i månadskalendern (inklusive
+dagsdetalj-listan) **och** i veckoschemat ovanför — samma filter gäller
+båda vyerna. Påverkar inte semestermarkeringen, som alltid tar hänsyn till
+alla kalendrar oavsett filter.
 
 ## Skapa händelser genom att dra i månadskalendern
 
 Dra över flera dagar i rutnätet (håll ner och dra) för att öppna ett litet
-formulär där du skriver en titel och väljer vilken persons kalender
-händelsen ska läggas på — sparas som en heldagshändelse via
+formulär där du skriver en titel och väljer vilken kalender (person eller
+delad) händelsen ska läggas på — sparas som en heldagshändelse via
 `calendar.create_event`. Ett vanligt klick (utan att dra) väljer bara
 dagen som vanligt och visar en "+ Lägg till händelse"-knapp för att skapa
 en enskild dag på samma sätt.
@@ -234,47 +276,41 @@ tyst och formuläret ligger kvar öppet.
 
 ## Hur "Idag"-texten fylls i
 
-`entity` för varje person kan vara **vilken entitet som helst** — kortet
-visar bara `state`. Enklast är en `template`-sensor du själv definierar,
-t.ex. baserat på dina cal_combiner-kalendrar:
+`entities` för varje person är en lista med **valfria entiteter** — kortet
+visar `state` för var och en, en rad per sensor. Sensorer vars state är
+tomt/okänt hoppas över (om alla är tomma visas en enda "Inget planerat
+idag"-rad). Enklast är `template`-sensorer du själv definierar, t.ex.
+baserat på dina cal_combiner-kalendrar:
+
+```yaml
+persons:
+  - name: Anna
+    entities:
+      - sensor.anna_skola
+      - sensor.anna_fritids
+```
 
 ```yaml
 template:
   - sensor:
-      - name: "Anna idag"
+      - name: "Anna skola"
         state: >
-          {% set events = state_attr('calendar.anna', 'message') %}
-          {{ events if events else 'Inget planerat idag' }}
+          {% set events = state_attr('calendar.anna_skola', 'message') %}
+          {{ events if events else '' }}
+      - name: "Anna fritids"
+        state: >
+          {% set events = state_attr('calendar.anna_fritids', 'message') %}
+          {{ events if events else '' }}
 ```
 
 ## Hur veckoschemat fylls i
 
-`week_entity` är valfri per person. Kortet läser attributen `monday`,
-`tuesday`, `wednesday`, `thursday`, `friday`, `saturday`, `sunday`
-(engelska, gemener) på den entiteten och visar dem i respektive kolumn.
-Saknas `week_entity` eller ett attribut visas ett streck (`–`).
-
-Exempel på en template-sensor som bygger veckan:
-
-```yaml
-template:
-  - sensor:
-      - name: "Anna vecka"
-        state: "ok"
-        attributes:
-          monday: "Simskola 17:00"
-          tuesday: "–"
-          wednesday: "Fotboll 18:00"
-          thursday: "–"
-          friday: "Sover hos kompis"
-          saturday: "–"
-          sunday: "Familjemiddag"
-```
-
-Du styr alltså helt själv vad som räknas ut och visas — kortet är bara
-ett rent visningslager. Det gör det enkelt att koppla in cal_combiner,
-vanliga kalenderentiteter, eller något helt annat längre fram utan att
-kortet behöver ändras.
+Veckoschemat läser **samma `calendar_entity`** som månadskalendern — inga
+separata vecko-sensorer. Kortet hämtar innevarande veckas händelser
+(måndag–söndag) direkt via Home Assistants kalender-API och listar
+titlarna (flera händelser samma dag separeras med " • "). Saknar en
+person `calendar_entity` visas ett streck (`–`) i alla kolumner för den
+raden.
 
 ## Allmänna raden (idag)
 
@@ -293,7 +329,11 @@ med:
 - Titel och "starta ihopfälld"-kryssruta
 - Nedräkningar: antal som visas + lista med entity-picker, namn och en
   "Visa alltid"-kryssruta (motsvarar `pinned`)
-- Personer: namn, entitet, valfri vecko-entitet, ikon och färg
+- Personer: namn, valfri koppling till en HA-`person.*`-entitet, en
+  ombyggbar lista med "idag"-sensorer, kalender (vecka + månad), ikon
+  och färg
+- Delade kalendrar: radnamn i veckoschemat + en lista med
+  kalender-entitet, namn och färg
 - Allmänna sensorer: entitet, namn och ikon
 
 Alla listor har egna "+ Lägg till..."-knappar och en ✕ för att ta bort
@@ -304,10 +344,33 @@ Editorn använder `ha-entity-picker` om den är laddad i din frontend
 (vilket den normalt är), annars faller den tillbaka på ett vanligt
 textfält för entity_id.
 
+## Uppgradera från tidigare version
+
+Från och med version 0.1.0 har konfigurationsformatet ändrats (breaking
+change):
+
+- `entity` (en sensor per person) → `entities` (lista, en eller flera
+  sensorer per person). Byt `entity: sensor.x` mot
+  `entities: [sensor.x]`.
+- `week_entity` är borttaget helt. Veckoschemat läser numera
+  `calendar_entity` istället (samma entitet som redan användes av
+  månadskalendern). Har du inte redan satt `calendar_entity` på dina
+  personer behöver du göra det för att få innehåll i veckoschemat.
+- Nytt valfritt fält `person_entity` per person (koppla till en
+  `person.*`-entitet för att slippa fylla i namn/bild manuellt).
+- Nytt toppnivå-fält `calendars` för kalendrar utan koppling till en
+  person, plus `calendars_label` för radnamnet de får i veckoschemat.
+
+Gamla konfigurationer med `entity`/`week_entity` ger inget fel, men de
+fälten läses inte längre — uppdatera din kort-YAML enligt exemplet högre
+upp, eller använd den visuella editorn som redan är byggd för det nya
+formatet.
+
 ## Idéer för vidare utveckling
 
 - Klickbar person-rad som öppnar en mer detaljerad vy/dialog.
 - Färgkodning i veckoschemat baserat på händelsetyp.
-- Egen visuell editor (just nu är kortet YAML-only).
 - Direktkoppling mot cal_combiners ICS-flöde istället för mellanliggande
   template-sensorer, om du vill slippa hålla sensorerna uppdaterade själv.
+- En separat HA-sidopanel för att administrera personer/kalendrar på ett
+  ställe, delat mellan flera kort/dashboards (diskuterat, inte påbörjat).

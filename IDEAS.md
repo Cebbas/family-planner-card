@@ -23,13 +23,16 @@ profilbild (`entity_picture`) automatiskt istället för manuellt
 namn/ikon, med fallback till mdi-ikon om ingen bild finns.
 
 ## Sidopanel för central konfiguration
-Diskuterat men inte påbörjat: en egen sida i HA:s sidopanel (registrerad
-via `panel_custom`) där man sätter upp personer/kalendrar/sensorer på ett
-ställe. Kräver antingen att panelen fortsätter redigera samma
-Lovelace-kort-YAML (då är den bara en rymligare variant av dagens
-in-dialog-editor), eller att konfigurationen flyttas till en delad
-lagringsplats (t.ex. en HA-helper) som flera kort kan läsa från — det
-senare är en större arkitekturändring och behöver beslutas separat.
+✅ Klar. `family-planner-panel.js` registreras via `panel_custom` och ger
+en egen sida i HA:s sidomeny för att bygga upp personer/delade
+kalendrar/globala ikon-nyckelord. Sparas via HA:s `frontend/user_data`-
+API (delat per HA-användare, ingen extra helper-entitet). Kort vars YAML
+utelämnar `persons` helt hämtar därifrån automatiskt istället för att
+kräva `persons` lokalt i varje kort.
+
+Naturligt nästa steg: låta panelen även redigera fler av kortets globala
+inställningar (väder, TTS, semestermarkering) om man vill undvika att
+upprepa dem per kort/dashboard också.
 
 ## Månadskalender
 ✅ Klar. En riktig kalender i månadsvy under veckoschemat (`show_month_calendar`),

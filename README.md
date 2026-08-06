@@ -11,6 +11,10 @@ En egen Lovelace-card till Home Assistant med:
   `calendar_entity` — samma kalender som driver månadsvyn. Kalendrar som
   inte hör till en person (t.ex. en delad familjekalender) samlas i en
   extra delad rad.
+- **Sidopanel** (valfri): en egen sida i HA:s sidomeny där du bygger upp
+  personer/kalendrar/ikon-nyckelord på ett ställe, delat mellan hur många
+  kort som helst utan att kopiera YAML — se
+  [Sidopanel för central konfiguration](#sidopanel-för-central-konfiguration-delad-mellan-flera-kort).
 
 > **Uppgraderar du från en äldre version?** Se
 > [Uppgradera från tidigare version](#uppgradera-från-tidigare-version)
@@ -174,6 +178,27 @@ Så om en persons "idag"-sensor har state `"Fotbollsträning 17:00"` visas
 
 Lokala bilder lägger du precis som kortet självt i `/config/www/` och
 pekar på dem som `/local/dinbild.png`.
+
+### Person-specifika ikon-nyckelord
+
+Varje person kan ha en egen `icon_keywords`-lista som matchar **före**
+den globala — perfekt för att samma ord ska ge olika bild beroende på
+vem det gäller, t.ex. respektive barns egna lagbild vid "Fotbollsträning":
+
+```yaml
+persons:
+  - name: Sebastian
+    icon_keywords:
+      - match: fotboll
+        icon: /local/icons/sebastians_lag.png
+  - name: Elis
+    icon_keywords:
+      - match: fotboll
+        icon: /local/icons/elis_lag.png
+```
+
+Matchar inget av personens egna nyckelord provas de globala
+`icon_keywords` som vanligt.
 
 ## Månadskalender
 
@@ -344,6 +369,59 @@ Editorn använder `ha-entity-picker` om den är laddad i din frontend
 (vilket den normalt är), annars faller den tillbaka på ett vanligt
 textfält för entity_id.
 
+## Sidopanel för central konfiguration (delad mellan flera kort)
+
+Om du vill lägga kortet på flera dashboards utan att upprepa hela
+person-/kalenderuppsättningen i varje kort-YAML, finns en fristående
+sidopanel (`family-planner-panel.js`) där du bygger upp personer,
+delade kalendrar och globala ikon-nyckelord på **ett** ställe. Den
+sparar via Home Assistants inbyggda `frontend/user_data`-API - samma
+mekanism HA:s egen frontend använder för användarinställningar - så
+ingen extra integration eller helper-entitet behövs.
+
+### Installation
+
+`family-planner-panel.js` följer med i samma repo/release som kortet, så
+har du redan installerat kortet (via HACS eller manuellt) finns filen
+redan där du la den. Lägg sedan till i `configuration.yaml`:
+
+```yaml
+panel_custom:
+  - name: family-planner-panel
+    sidebar_title: Familjeplanering
+    sidebar_icon: mdi:account-group
+    module_url: URL_HÄR
+    embed_iframe: false
+    trust_external_script: true
+```
+
+Sätt `module_url` beroende på hur du installerade kortet:
+
+- **Via HACS:** `/hacsfiles/family-planner-card/family-planner-panel.js`
+- **Manuellt** (kopierat till `/config/www/`): `/local/family-planner-panel.js`
+
+Starta sedan om Home Assistant. En ny länk **"Familjeplanering"** dyker
+upp i sidomenyn. Öppna panelen, bygg upp personer/kalendrar/
+ikon-nyckelord och klicka **Spara**.
+
+### Använda den delade konfigurationen i ett kort
+
+Lägg till kortet **utan** `persons` i dess YAML:
+
+```yaml
+type: custom:family-planner-card
+title: Familjeplanering
+```
+
+Så fort `persons` saknas helt hämtar kortet automatiskt `persons`,
+`calendars`, `calendars_label` och `icon_keywords` från panelens sparade
+data (cachas 5 minuter). Övriga inställningar (titel, nedräkningar,
+väder, allmänna sensorer, TTS, m.m.) är fortfarande lokala per kort/
+dashboard, så olika dashboards kan visa samma familj på olika sätt.
+
+Anger du `persons` lokalt i kortets YAML används den istället, som
+tidigare - panelen är helt valfri.
+
 ## Uppgradera från tidigare version
 
 Från och med version 0.1.0 har konfigurationsformatet ändrats (breaking
@@ -360,6 +438,10 @@ change):
   `person.*`-entitet för att slippa fylla i namn/bild manuellt).
 - Nytt toppnivå-fält `calendars` för kalendrar utan koppling till en
   person, plus `calendars_label` för radnamnet de får i veckoschemat.
+- Nytt valfritt fält `icon_keywords` per person (matchar före de globala).
+- Ny valfri sidopanel (`family-planner-panel.js`) för att sätta upp
+  personer/kalendrar på ett ställe - se
+  [Sidopanel för central konfiguration](#sidopanel-för-central-konfiguration-delad-mellan-flera-kort).
 
 Gamla konfigurationer med `entity`/`week_entity` ger inget fel, men de
 fälten läses inte längre — uppdatera din kort-YAML enligt exemplet högre
@@ -372,5 +454,3 @@ formatet.
 - Färgkodning i veckoschemat baserat på händelsetyp.
 - Direktkoppling mot cal_combiners ICS-flöde istället för mellanliggande
   template-sensorer, om du vill slippa hålla sensorerna uppdaterade själv.
-- En separat HA-sidopanel för att administrera personer/kalendrar på ett
-  ställe, delat mellan flera kort/dashboards (diskuterat, inte påbörjat).

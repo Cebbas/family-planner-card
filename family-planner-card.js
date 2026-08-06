@@ -61,6 +61,11 @@
  *   3. Lägg till kortet i ditt dashboard med YAML enligt exemplet ovan.
  */
 
+// Nyckel i Home Assistants "frontend user data"-lagring (samma mekanism
+// HA:s egen frontend använder för användarinställningar) - måste matcha
+// nyckeln i family-planner-panel.js.
+const FPC_SHARED_CONFIG_KEY = "family_planner_config";
+
 const DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 const DAY_LABELS = ["Mån", "Tis", "Ons", "Tor", "Fre", "Lör", "Sön"];
 
@@ -162,6 +167,10 @@ function renderIconBadge(icon) {
 class FamilyPlannerCard extends HTMLElement {
   constructor() {
     super();
+    // Shadow DOM isolerar varje kort-instans - annars kolliderar de
+    // hårdkodade id:na (#fpc-header m.fl.) om samma kort läggs flera
+    // gånger på en dashboard.
+    this.attachShadow({ mode: "open" });
     this._collapsed = false;
     this._built = false;
     const today = new Date();
@@ -174,41 +183,63 @@ class FamilyPlannerCard extends HTMLElement {
     this._creatingEvent = null; // { startIso, endIso, targetEntity }
   }
 
-  setConfig(config) {
-    if (!config) {
-      throw new Error("Ingen konfiguration angiven");
-    }
-    if (!Array.isArray(config.persons) || config.persons.length === 0) {
-      throw new Error("Du måste ange minst en person under 'persons'");
-    }
-    const persons = config.persons.map((p) => {
-      if (!p.name && !p.person_entity) {
-        throw new Error("En person saknar både 'name' och 'person_entity'");
-      }
-      return {
+  // Delas mellan lokal YAML-parsning och delad konfiguration från
+  // sidopanelen - hoppar tyst över ogiltiga poster istället för att
+  // krascha kortet när delad data laddas asynkront.
+  _normalizePersons(list) {
+    return (Array.isArray(list) ? list : [])
+      .filter((p) => p && (p.name || p.person_entity))
+      .map((p) => ({
         name: p.name || "",
         person_entity: p.person_entity || null,
         entities: Array.isArray(p.entities) ? p.entities : p.entities ? [p.entities] : [],
         calendar_entity: p.calendar_entity || null,
         icon: p.icon || "mdi:account",
         color: p.color || null,
-      };
-    });
+        icon_keywords: Array.isArray(p.icon_keywords) ? p.icon_keywords : [],
+      }));
+  }
+
+  _normalizeCalendars(list) {
+    return (Array.isArray(list) ? list : [])
+      .filter((c) => c && c.entity)
+      .map((c) => ({
+        entity: c.entity,
+        name: c.name || c.entity,
+        color: c.color || "var(--secondary-text-color)",
+      }));
+  }
+
+  setConfig(config) {
+    if (!config) {
+      throw new Error("Ingen konfiguration angiven");
+    }
+    // Om 'persons' helt utelämnas hämtas personer/kalendrar/ikon-nyckelord
+    // istället från sidopanelen "Familjeplanering" (delad konfiguration).
+    this._usesSharedConfig = !Array.isArray(config.persons);
+    let persons = [];
+    let calendars = [];
+    let calendars_label = "Övrigt";
+    let icon_keywords = Array.isArray(config.icon_keywords) ? config.icon_keywords : [];
+
+    if (!this._usesSharedConfig) {
+      if (config.persons.length === 0) {
+        throw new Error(
+          "Du måste ange minst en person under 'persons', eller ta bort 'persons' helt för att hämta personer från sidopanelen 'Familjeplanering'"
+        );
+      }
+      persons = this._normalizePersons(config.persons);
+      calendars = this._normalizeCalendars(config.calendars);
+      calendars_label = config.calendars_label || "Övrigt";
+    }
+
     const countdownCfg = config.countdowns || {};
     const weatherCfg = config.weather || {};
     this._config = {
       title: config.title || "Familjeplanering",
       persons,
-      calendars: Array.isArray(config.calendars)
-        ? config.calendars
-            .filter((c) => c && c.entity)
-            .map((c) => ({
-              entity: c.entity,
-              name: c.name || c.entity,
-              color: c.color || "var(--secondary-text-color)",
-            }))
-        : [],
-      calendars_label: config.calendars_label || "Övrigt",
+      calendars,
+      calendars_label,
       general: Array.isArray(config.general) ? config.general : [],
       start_collapsed: !!config.start_collapsed,
       countdowns: {
@@ -218,7 +249,7 @@ class FamilyPlannerCard extends HTMLElement {
       weather: weatherCfg.entity
         ? { entity: weatherCfg.entity, show_week: !!weatherCfg.show_week }
         : null,
-      icon_keywords: Array.isArray(config.icon_keywords) ? config.icon_keywords : [],
+      icon_keywords,
       show_month_calendar: config.show_month_calendar !== false,
       vacation_keywords: Array.isArray(config.vacation_keywords) ? config.vacation_keywords : [],
       tts:
@@ -227,6 +258,7 @@ class FamilyPlannerCard extends HTMLElement {
           : null,
     };
     this._collapsed = this._config.start_collapsed;
+    this._sharedConfigCache = null;
     this._built = false;
     this._render();
   }
@@ -239,6 +271,37 @@ class FamilyPlannerCard extends HTMLElement {
       this._update();
     }
     this._maybeFetchForecast();
+    this._maybeFetchMonthEvents();
+    this._maybeFetchWeekEvents();
+    this._maybeLoadSharedConfig();
+  }
+
+  // Hämtar personer/kalendrar/ikon-nyckelord från sidopanelens delade
+  // konfiguration (frontend/user_data) när 'persons' inte anges lokalt.
+  async _maybeLoadSharedConfig() {
+    if (!this._usesSharedConfig || !this._hass) return;
+    if (this._sharedConfigLoading) return;
+    const cache = this._sharedConfigCache;
+    const fresh = cache && Date.now() - cache.fetchedAt < 5 * 60 * 1000;
+    if (fresh) return;
+
+    this._sharedConfigLoading = true;
+    try {
+      const result = await this._hass.callWS({
+        type: "frontend/get_user_data",
+        key: FPC_SHARED_CONFIG_KEY,
+      });
+      const data = (result && result.value) || {};
+      this._config.persons = this._normalizePersons(data.persons);
+      this._config.calendars = this._normalizeCalendars(data.calendars);
+      this._config.calendars_label = data.calendars_label || "Övrigt";
+      this._config.icon_keywords = Array.isArray(data.icon_keywords) ? data.icon_keywords : [];
+      this._sharedConfigCache = { fetchedAt: Date.now() };
+    } catch (err) {
+      // Sidopanelen kanske inte finns/aldrig sparats än - visas som "inga personer".
+    }
+    this._sharedConfigLoading = false;
+    this._update();
     this._maybeFetchMonthEvents();
     this._maybeFetchWeekEvents();
   }
@@ -257,6 +320,7 @@ class FamilyPlannerCard extends HTMLElement {
         color: p.color || "var(--primary-color)",
         calendar_entity: p.calendar_entity,
         isPerson: true,
+        iconKeywords: this._iconKeywordsFor(p),
       }));
     const sharedSources = (cfg.calendars || []).map((c) => ({
       key: `cal:${c.entity}`,
@@ -264,6 +328,7 @@ class FamilyPlannerCard extends HTMLElement {
       color: c.color,
       calendar_entity: c.entity,
       isPerson: false,
+      iconKeywords: cfg.icon_keywords,
     }));
     return [...personSources, ...sharedSources];
   }
@@ -394,6 +459,14 @@ class FamilyPlannerCard extends HTMLElement {
     const name = p.name || (st && st.attributes.friendly_name) || p.person_entity || "?";
     const picture = st && st.attributes.entity_picture ? st.attributes.entity_picture : null;
     return { name, picture };
+  }
+
+  // Person-specifika ikon-nyckelord vinner över globala (matchIcon tar
+  // första träffen), så samma ord kan ge olika bild/ikon per person.
+  _iconKeywordsFor(p) {
+    const cfg = this._config;
+    const personKw = (p && p.icon_keywords) || [];
+    return [...personKw, ...cfg.icon_keywords];
   }
 
   // Text-rader för "Idag" - en rad per entitet i p.entities med ett
@@ -622,7 +695,7 @@ class FamilyPlannerCard extends HTMLElement {
 
     const generalIds = cfg.general.map((g, i) => `fpc-gen-${i}`).join(",");
 
-    this.innerHTML = `
+    this.shadowRoot.innerHTML = `
       ${style}
       <ha-card class="fpc">
         <div class="fpc-countdowns" id="fpc-countdowns"></div>
@@ -664,13 +737,13 @@ class FamilyPlannerCard extends HTMLElement {
       </ha-card>
     `;
 
-    this.querySelector("#fpc-header").addEventListener("click", () => {
+    this.shadowRoot.querySelector("#fpc-header").addEventListener("click", () => {
       this._collapsed = !this._collapsed;
-      this.querySelector("#fpc-today").classList.toggle("collapsed", this._collapsed);
-      this.querySelector("#fpc-toggle").classList.toggle("collapsed", this._collapsed);
+      this.shadowRoot.querySelector("#fpc-today").classList.toggle("collapsed", this._collapsed);
+      this.shadowRoot.querySelector("#fpc-toggle").classList.toggle("collapsed", this._collapsed);
     });
 
-    this.querySelector("#fpc-month-prev").addEventListener("click", () => {
+    this.shadowRoot.querySelector("#fpc-month-prev").addEventListener("click", () => {
       this._calendarViewMonth = new Date(
         this._calendarViewMonth.getFullYear(),
         this._calendarViewMonth.getMonth() - 1,
@@ -680,7 +753,7 @@ class FamilyPlannerCard extends HTMLElement {
       this._maybeFetchMonthEvents();
       this._update();
     });
-    this.querySelector("#fpc-month-next").addEventListener("click", () => {
+    this.shadowRoot.querySelector("#fpc-month-next").addEventListener("click", () => {
       this._calendarViewMonth = new Date(
         this._calendarViewMonth.getFullYear(),
         this._calendarViewMonth.getMonth() + 1,
@@ -691,7 +764,7 @@ class FamilyPlannerCard extends HTMLElement {
       this._update();
     });
 
-    this.querySelector("#fpc-month-today-btn").addEventListener("click", () => {
+    this.shadowRoot.querySelector("#fpc-month-today-btn").addEventListener("click", () => {
       const today = new Date();
       this._calendarViewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
       this._selectedDate = isoDate(today);
@@ -699,12 +772,12 @@ class FamilyPlannerCard extends HTMLElement {
       this._update();
     });
 
-    this.querySelector("#fpc-tts-btn").addEventListener("click", (ev) => {
+    this.shadowRoot.querySelector("#fpc-tts-btn").addEventListener("click", (ev) => {
       ev.stopPropagation();
       this._speakToday();
     });
 
-    this.querySelector("#fpc-share-btn").addEventListener("click", (ev) => {
+    this.shadowRoot.querySelector("#fpc-share-btn").addEventListener("click", (ev) => {
       ev.stopPropagation();
       this._shareWeek();
     });
@@ -800,7 +873,7 @@ class FamilyPlannerCard extends HTMLElement {
       navigator.clipboard
         .writeText(text)
         .then(() => {
-          const btn = this.querySelector("#fpc-share-btn");
+          const btn = this.shadowRoot.querySelector("#fpc-share-btn");
           if (btn) {
             const original = btn.textContent;
             btn.textContent = "Kopierat!";
@@ -815,11 +888,11 @@ class FamilyPlannerCard extends HTMLElement {
     if (!this._config || !this._hass) return;
     const cfg = this._config;
 
-    const ttsBtn = this.querySelector("#fpc-tts-btn");
+    const ttsBtn = this.shadowRoot.querySelector("#fpc-tts-btn");
     if (ttsBtn) ttsBtn.style.display = cfg.tts ? "" : "none";
 
     // Nedräkningar - överst
-    const cdEl = this.querySelector("#fpc-countdowns");
+    const cdEl = this.shadowRoot.querySelector("#fpc-countdowns");
     if (cdEl) {
       if (cfg.countdowns.items.length === 0) {
         cdEl.style.display = "none";
@@ -859,7 +932,7 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     // Aktuellt väder
-    const weatherEl = this.querySelector("#fpc-weather");
+    const weatherEl = this.shadowRoot.querySelector("#fpc-weather");
     if (weatherEl) {
       if (!cfg.weather) {
         weatherEl.style.display = "none";
@@ -883,8 +956,12 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     // Personrader - idag
-    const personsEl = this.querySelector("#fpc-persons");
-    if (personsEl) {
+    const personsEl = this.shadowRoot.querySelector("#fpc-persons");
+    if (personsEl && cfg.persons.length === 0) {
+      personsEl.innerHTML = this._usesSharedConfig
+        ? `<div class="fpc-general-empty">Inga personer konfigurerade ännu. Öppna sidopanelen "Familjeplanering" för att lägga till familjemedlemmar.</div>`
+        : `<div class="fpc-general-empty">Inga personer konfigurerade.</div>`;
+    } else if (personsEl) {
       personsEl.innerHTML = cfg.persons
         .map((p) => {
           const color = p.color || "var(--primary-color)";
@@ -893,9 +970,10 @@ class FamilyPlannerCard extends HTMLElement {
           const avatarInner = picture
             ? `<img class="fpc-avatar-img" src="${picture}" alt="" />`
             : `<ha-icon icon="${icon}"></ha-icon>`;
+          const personIconKeywords = this._iconKeywordsFor(p);
           const lines = this._personTodayLines(p)
             .map((text) => {
-              const badge = renderIconBadge(matchIcon(text, cfg.icon_keywords));
+              const badge = renderIconBadge(matchIcon(text, personIconKeywords));
               return `<div class="fpc-person-state-line">${badge}${fpcEsc(text)}</div>`;
             })
             .join("");
@@ -915,7 +993,7 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     // Allmän rad - bara sensorer som är "on"
-    const generalEl = this.querySelector("#fpc-general");
+    const generalEl = this.shadowRoot.querySelector("#fpc-general");
     if (generalEl) {
       const activeOnes = cfg.general.filter((g) => {
         const st = this._stateObj(g.entity);
@@ -923,7 +1001,7 @@ class FamilyPlannerCard extends HTMLElement {
       });
 
       // Notis-badge i headern, synlig även när sektionen är ihopfälld
-      const badgeEl = this.querySelector("#fpc-badge");
+      const badgeEl = this.shadowRoot.querySelector("#fpc-badge");
       if (badgeEl) {
         if (activeOnes.length > 0) {
           badgeEl.textContent = String(activeOnes.length);
@@ -954,7 +1032,7 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     // Veckoschema
-    const tableEl = this.querySelector("#fpc-table");
+    const tableEl = this.shadowRoot.querySelector("#fpc-table");
     if (tableEl) {
       const todayIdx = this._todayKey();
       const headerCells = DAY_LABELS.map(
@@ -998,7 +1076,7 @@ class FamilyPlannerCard extends HTMLElement {
         const html = events
           .map((ev) => {
             const summary = ev.summary || "(utan titel)";
-            const badge = renderIconBadge(matchIcon(summary, cfg.icon_keywords));
+            const badge = renderIconBadge(matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
             return `${badge}${fpcEsc(summary)}`;
           })
           .join(" • ");
@@ -1049,7 +1127,13 @@ class FamilyPlannerCard extends HTMLElement {
         if (!start) return;
         const evDate = isoDate(new Date(start));
         if (evDate === dateIso) {
-          results.push({ ...ev, sourceKey: src.key, sourceName: src.name, sourceColor: src.color });
+          results.push({
+            ...ev,
+            sourceKey: src.key,
+            sourceName: src.name,
+            sourceColor: src.color,
+            sourceIconKeywords: src.iconKeywords,
+          });
         }
       });
     });
@@ -1120,7 +1204,7 @@ class FamilyPlannerCard extends HTMLElement {
 
   _updateMonthCalendar() {
     const cfg = this._config;
-    const section = this.querySelector("#fpc-month-section");
+    const section = this.shadowRoot.querySelector("#fpc-month-section");
     if (!section) return;
     if (!cfg.show_month_calendar) {
       section.style.display = "none";
@@ -1132,10 +1216,10 @@ class FamilyPlannerCard extends HTMLElement {
 
     const year = this._calendarViewMonth.getFullYear();
     const month = this._calendarViewMonth.getMonth();
-    this.querySelector("#fpc-month-title").textContent = `${MONTH_NAMES[month]} ${year}`;
+    this.shadowRoot.querySelector("#fpc-month-title").textContent = `${MONTH_NAMES[month]} ${year}`;
 
     // Filter-chips per kalenderkälla (person eller delad kalender)
-    const filtersEl = this.querySelector("#fpc-month-filters");
+    const filtersEl = this.shadowRoot.querySelector("#fpc-month-filters");
     if (sources.length === 0) {
       filtersEl.innerHTML = "";
     } else {
@@ -1162,7 +1246,7 @@ class FamilyPlannerCard extends HTMLElement {
 
     const gridStart = startOfCalendarGrid(year, month);
     const todayIso = isoDate(new Date());
-    const gridEl = this.querySelector("#fpc-month-grid");
+    const gridEl = this.shadowRoot.querySelector("#fpc-month-grid");
 
     const weekdayHeaders = DAY_LABELS.map((l) => `<div class="fpc-month-weekday">${l}</div>`).join("");
 
@@ -1233,7 +1317,7 @@ class FamilyPlannerCard extends HTMLElement {
 
   _renderMonthDayDetail() {
     const cfg = this._config;
-    const detailEl = this.querySelector("#fpc-month-daydetail");
+    const detailEl = this.shadowRoot.querySelector("#fpc-month-daydetail");
     if (!detailEl) return;
     const sources = this._calendarSources();
 
@@ -1289,7 +1373,7 @@ class FamilyPlannerCard extends HTMLElement {
       html += events
         .map((ev) => {
           const summary = ev.summary || "(utan titel)";
-          const badge = renderIconBadge(matchIcon(summary, cfg.icon_keywords));
+          const badge = renderIconBadge(matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
           return `
             <div class="fpc-month-event">
               <div class="fpc-month-event-dot" style="background:${ev.sourceColor}"></div>
@@ -1349,6 +1433,11 @@ function fpcEsc(str) {
 }
 
 class FamilyPlannerCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+  }
+
   setConfig(config) {
     this._config = {
       type: config.type,
@@ -1375,6 +1464,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
         calendar_entity: p.calendar_entity || "",
         icon: p.icon || "",
         color: p.color || "",
+        icon_keywords: Array.isArray(p.icon_keywords) ? p.icon_keywords : [],
       })),
       calendars: (config.calendars || []).map((c) => ({
         entity: c.entity || "",
@@ -1390,7 +1480,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
   set hass(hass) {
     this._hass = hass;
     // Uppdatera hass på alla entity-pickers utan att bygga om hela UI:t
-    this.querySelectorAll("ha-entity-picker").forEach((el) => {
+    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((el) => {
       el.hass = hass;
     });
   }
@@ -1479,6 +1569,61 @@ class FamilyPlannerCardEditor extends HTMLElement {
     return wrap;
   }
 
+  // Person-specifika ikon-nyckelord - matchar innan de globala
+  // (fpce-sektionen "Ikon-nyckelord"), så samma ord kan ge olika
+  // bild/ikon för olika personer, t.ex. Sebastians vs Elis fotbollslag.
+  _personIconKeywordsList(p, idx) {
+    const wrap = document.createElement("div");
+    const label = document.createElement("div");
+    label.className = "fpce-label";
+    label.textContent = "Person-specifika ikon-nyckelord (matchar före de globala)";
+    wrap.appendChild(label);
+
+    const keywords = Array.isArray(p.icon_keywords) ? p.icon_keywords : [];
+    keywords.forEach((kw, kIdx) => {
+      const matchInput = this._textInput(kw.match, "Ord, t.ex. fotboll", (val) => {
+        const persons = [...this._config.persons];
+        const list = [...(persons[idx].icon_keywords || [])];
+        list[kIdx] = { ...list[kIdx], match: val };
+        persons[idx] = { ...persons[idx], icon_keywords: list };
+        this._config = { ...this._config, persons };
+        this._fireChanged();
+      });
+      const iconInput = this._textInput(kw.icon, "⚽, mdi:soccer, eller bild-URL", (val) => {
+        const persons = [...this._config.persons];
+        const list = [...(persons[idx].icon_keywords || [])];
+        list[kIdx] = { ...list[kIdx], icon: val };
+        persons[idx] = { ...persons[idx], icon_keywords: list };
+        this._config = { ...this._config, persons };
+        preview.innerHTML = renderIconBadge(val);
+        this._fireChanged();
+      }, "140px");
+      const preview = document.createElement("div");
+      preview.innerHTML = renderIconBadge(kw.icon);
+      const removeBtn = this._removeBtn(() => {
+        const persons = [...this._config.persons];
+        const list = (persons[idx].icon_keywords || []).filter((_, i) => i !== kIdx);
+        persons[idx] = { ...persons[idx], icon_keywords: list };
+        this._config = { ...this._config, persons };
+        this._fireChanged();
+        this._render();
+      });
+      wrap.appendChild(this._row([matchInput, iconInput, preview, removeBtn]));
+    });
+
+    wrap.appendChild(
+      this._addBtn("+ Lägg till person-nyckelord", () => {
+        const persons = [...this._config.persons];
+        const list = [...(persons[idx].icon_keywords || []), { match: "", icon: "" }];
+        persons[idx] = { ...persons[idx], icon_keywords: list };
+        this._config = { ...this._config, persons };
+        this._fireChanged();
+        this._render();
+      })
+    );
+    return wrap;
+  }
+
   _textInput(value, placeholder, onChange, widthCss) {
     const input = document.createElement("input");
     input.type = "text";
@@ -1512,7 +1657,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
   _render() {
     const cfg = this._config;
 
-    this.innerHTML = `
+    this.shadowRoot.innerHTML = `
       <style>
         .fpce { padding: 8px 0; }
         .fpce-section {
@@ -1607,10 +1752,10 @@ class FamilyPlannerCardEditor extends HTMLElement {
       this._fireChanged();
     });
     titleField.appendChild(titleInput);
-    this.querySelector("#fpce-title-row").appendChild(titleField);
+    this.shadowRoot.querySelector("#fpce-title-row").appendChild(titleField);
 
     // Start collapsed
-    const collapsedRow = this.querySelector("#fpce-collapsed-row");
+    const collapsedRow = this.shadowRoot.querySelector("#fpce-collapsed-row");
     const collapsedCheckbox = document.createElement("input");
     collapsedCheckbox.type = "checkbox";
     collapsedCheckbox.checked = cfg.start_collapsed;
@@ -1641,10 +1786,10 @@ class FamilyPlannerCardEditor extends HTMLElement {
       this._fireChanged();
     });
     maxField.appendChild(maxInput);
-    this.querySelector("#fpce-maxshown-row").appendChild(maxField);
+    this.shadowRoot.querySelector("#fpce-maxshown-row").appendChild(maxField);
 
     // Ikon-nyckelord
-    const kwListEl = this.querySelector("#fpce-keyword-list");
+    const kwListEl = this.shadowRoot.querySelector("#fpce-keyword-list");
     cfg.icon_keywords.forEach((kw, idx) => {
       const card = document.createElement("div");
       card.className = "fpce-item-card";
@@ -1696,9 +1841,9 @@ class FamilyPlannerCardEditor extends HTMLElement {
         this._fireChanged();
       }, null, ["weather"])
     );
-    this.querySelector("#fpce-weather-entity-row").appendChild(weatherEntityField);
+    this.shadowRoot.querySelector("#fpce-weather-entity-row").appendChild(weatherEntityField);
 
-    const weatherWeekRowEl = this.querySelector("#fpce-weather-week-row");
+    const weatherWeekRowEl = this.shadowRoot.querySelector("#fpce-weather-week-row");
     const weatherWeekCheckbox = document.createElement("input");
     weatherWeekCheckbox.type = "checkbox";
     weatherWeekCheckbox.checked = cfg.weather.show_week;
@@ -1712,7 +1857,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
     weatherWeekRowEl.appendChild(weatherWeekLabel);
 
     // Countdown items
-    const cdListEl = this.querySelector("#fpce-countdown-list");    cfg.countdowns.items.forEach((item, idx) => {
+    const cdListEl = this.shadowRoot.querySelector("#fpce-countdown-list");    cfg.countdowns.items.forEach((item, idx) => {
       const card = document.createElement("div");
       card.className = "fpce-item-card";
 
@@ -1771,7 +1916,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
     );
 
     // Månadskalender - visa/dölj
-    const monthCalRow = this.querySelector("#fpce-monthcal-row");
+    const monthCalRow = this.shadowRoot.querySelector("#fpce-monthcal-row");
     const monthCalCheckbox = document.createElement("input");
     monthCalCheckbox.type = "checkbox";
     monthCalCheckbox.checked = cfg.show_month_calendar;
@@ -1785,7 +1930,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
     monthCalRow.appendChild(monthCalLabel);
 
     // Semestermarkering
-    const vacListEl = this.querySelector("#fpce-vacation-list");
+    const vacListEl = this.shadowRoot.querySelector("#fpce-vacation-list");
     cfg.vacation_keywords.forEach((kw, idx) => {
       const card = document.createElement("div");
       card.className = "fpce-item-card";
@@ -1836,7 +1981,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
         this._fireChanged();
       }, null, ["tts"])
     );
-    this.querySelector("#fpce-tts-entity-row").appendChild(ttsEntityField);
+    this.shadowRoot.querySelector("#fpce-tts-entity-row").appendChild(ttsEntityField);
 
     const ttsPlayerField = document.createElement("div");
     ttsPlayerField.className = "fpce-field";
@@ -1847,10 +1992,10 @@ class FamilyPlannerCardEditor extends HTMLElement {
         this._fireChanged();
       }, null, ["media_player"])
     );
-    this.querySelector("#fpce-tts-player-row").appendChild(ttsPlayerField);
+    this.shadowRoot.querySelector("#fpce-tts-player-row").appendChild(ttsPlayerField);
 
     // Persons
-    const personListEl = this.querySelector("#fpce-person-list");
+    const personListEl = this.shadowRoot.querySelector("#fpce-person-list");
     cfg.persons.forEach((p, idx) => {
       const card = document.createElement("div");
       card.className = "fpce-item-card";
@@ -1902,6 +2047,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
       card.appendChild(this._row([personEntityField]));
       card.appendChild(this._personEntitiesList(p, idx));
       card.appendChild(this._row([calField]));
+      card.appendChild(this._personIconKeywordsList(p, idx));
 
       const iconInput = this._textInput(p.icon, "mdi:account", (val) => {
         const persons = [...this._config.persons];
@@ -1941,9 +2087,9 @@ class FamilyPlannerCardEditor extends HTMLElement {
         this._fireChanged();
       })
     );
-    this.querySelector("#fpce-calendars-label-row").appendChild(calLabelField);
+    this.shadowRoot.querySelector("#fpce-calendars-label-row").appendChild(calLabelField);
 
-    const calListEl = this.querySelector("#fpce-calendar-list");
+    const calListEl = this.shadowRoot.querySelector("#fpce-calendar-list");
     cfg.calendars.forEach((c, idx) => {
       const card = document.createElement("div");
       card.className = "fpce-item-card";
@@ -1998,7 +2144,7 @@ class FamilyPlannerCardEditor extends HTMLElement {
     );
 
     // General sensors
-    const generalListEl = this.querySelector("#fpce-general-list");
+    const generalListEl = this.shadowRoot.querySelector("#fpce-general-list");
     cfg.general.forEach((g, idx) => {
       const card = document.createElement("div");
       card.className = "fpce-item-card";

@@ -1135,6 +1135,7 @@ class FamilyPlannerCard extends HTMLElement {
 
   static getStubConfig() {
     return {
+      type: "custom:family-planner-card",
       title: "Familjeplanering",
       countdowns: { max_shown: 5, items: [] },
       weather: null,
@@ -1165,6 +1166,7 @@ function fpcEsc(str) {
 class FamilyPlannerCardEditor extends HTMLElement {
   setConfig(config) {
     this._config = {
+      type: config.type,
       title: config.title || "",
       start_collapsed: !!config.start_collapsed,
       countdowns: {

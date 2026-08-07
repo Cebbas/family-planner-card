@@ -9,8 +9,12 @@
  * - ingen extra integration eller helper-entitet behövs.
  *
  * -----------------------------------------------------------------------
- * Installation (utöver att lägga family-planner-panel.js i /config/www/
- * eller via HACS):
+ * Installation:
+ *
+ * 0. Lägg family-planner-panel.js i /config/www/ manuellt - HACS laddar
+ *    bara ner kortets egen JS-fil (den som pekas ut i hacs.json), inte
+ *    hela repot, så den här filen följer INTE automatiskt med en
+ *    HACS-installation av kortet.
  *
  * 1. Lägg till i configuration.yaml:
  *

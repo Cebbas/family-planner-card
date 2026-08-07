@@ -381,28 +381,35 @@ ingen extra integration eller helper-entitet behövs.
 
 ### Installation
 
-`family-planner-panel.js` följer med i samma repo/release som kortet, så
-har du redan installerat kortet (via HACS eller manuellt) finns filen
-redan där du la den. Lägg sedan till i `configuration.yaml`:
+`family-planner-panel.js` ligger i samma repo som kortet, men **HACS
+laddar bara ner den fil som pekas ut i `hacs.json`** (kortets egen JS-fil)
+- inte hela repot. Panelen finns alltså inte automatiskt under
+`/hacsfiles/...` även om du installerat kortet via HACS, och
+`panel_custom` ger då felet "Unable to load custom panel". Lägg därför
+alltid panelen manuellt, oavsett hur du installerade kortet:
+
+1. Hämta filen: `https://raw.githubusercontent.com/Cebbas/family-planner-card/main/family-planner-panel.js`
+2. Lägg den i `/config/www/` (t.ex. via Samba/Studio Code Server, samma
+   sätt som i den manuella kort-installationen ovan).
+3. Lägg till i `configuration.yaml`:
 
 ```yaml
 panel_custom:
   - name: family-planner-panel
     sidebar_title: Familjeplanering
     sidebar_icon: mdi:account-group
-    module_url: URL_HÄR
+    module_url: /local/family-planner-panel.js
     embed_iframe: false
     trust_external_script: true
 ```
 
-Sätt `module_url` beroende på hur du installerade kortet:
-
-- **Via HACS:** `/hacsfiles/family-planner-card/family-planner-panel.js`
-- **Manuellt** (kopierat till `/config/www/`): `/local/family-planner-panel.js`
-
 Starta sedan om Home Assistant. En ny länk **"Familjeplanering"** dyker
 upp i sidomenyn. Öppna panelen, bygg upp personer/kalendrar/
 ikon-nyckelord och klicka **Spara**.
+
+Uppdaterar du kortet senare via HACS, kom ihåg att då och då ladda ner
+`family-planner-panel.js` på nytt manuellt också om du gjort ändringar i
+den filen sedan sist.
 
 ### Använda den delade konfigurationen i ett kort
 

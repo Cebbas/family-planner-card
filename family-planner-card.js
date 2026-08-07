@@ -299,8 +299,11 @@ class FamilyPlannerCard extends HTMLElement {
       this._sharedConfigCache = { fetchedAt: Date.now() };
     } catch (err) {
       // Sidopanelen kanske inte finns/aldrig sparats än - visas som "inga personer".
+    } finally {
+      // Alltid nollställd, annars fastnar hämtningen i "laddar" för alltid
+      // om något oväntat kastar fel ovan.
+      this._sharedConfigLoading = false;
     }
-    this._sharedConfigLoading = false;
     this._update();
     this._maybeFetchMonthEvents();
     this._maybeFetchWeekEvents();
@@ -312,10 +315,13 @@ class FamilyPlannerCard extends HTMLElement {
   _calendarSources() {
     const cfg = this._config;
     if (!cfg) return [];
+    // Nycklas på index, inte namn - två personer med samma (eller tomt)
+    // namn ska inte kunna krocka och tappa varandras vecko-/månadsdata.
     const personSources = cfg.persons
-      .filter((p) => p.calendar_entity)
-      .map((p) => ({
-        key: `person:${p.name}`,
+      .map((p, idx) => ({ p, idx }))
+      .filter(({ p }) => p.calendar_entity)
+      .map(({ p, idx }) => ({
+        key: `person:${idx}`,
         name: this._personDisplay(p).name,
         color: p.color || "var(--primary-color)",
         calendar_entity: p.calendar_entity,
@@ -369,14 +375,17 @@ class FamilyPlannerCard extends HTMLElement {
     if (fresh || this._monthEventsLoading) return;
 
     this._monthEventsLoading = true;
-    const gridStart = startOfCalendarGrid(year, month);
-    const gridEnd = new Date(gridStart);
-    gridEnd.setDate(gridEnd.getDate() + 42);
+    try {
+      const gridStart = startOfCalendarGrid(year, month);
+      const gridEnd = new Date(gridStart);
+      gridEnd.setDate(gridEnd.getDate() + 42);
 
-    const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
-    const data = await this._fetchCalendarEvents(entityIds, gridStart, gridEnd);
-    this._monthEventsCache = { key: monthKey, fetchedAt: Date.now(), data };
-    this._monthEventsLoading = false;
+      const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
+      const data = await this._fetchCalendarEvents(entityIds, gridStart, gridEnd);
+      this._monthEventsCache = { key: monthKey, fetchedAt: Date.now(), data };
+    } finally {
+      this._monthEventsLoading = false;
+    }
     this._update();
   }
 
@@ -393,12 +402,15 @@ class FamilyPlannerCard extends HTMLElement {
     if (fresh || this._weekEventsLoading) return;
 
     this._weekEventsLoading = true;
-    const end = new Date(monday);
-    end.setDate(end.getDate() + 7);
-    const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
-    const data = await this._fetchCalendarEvents(entityIds, monday, end);
-    this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), data };
-    this._weekEventsLoading = false;
+    try {
+      const end = new Date(monday);
+      end.setDate(end.getDate() + 7);
+      const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
+      const data = await this._fetchCalendarEvents(entityIds, monday, end);
+      this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), data };
+    } finally {
+      this._weekEventsLoading = false;
+    }
     this._update();
   }
 
@@ -693,8 +705,6 @@ class FamilyPlannerCard extends HTMLElement {
       </style>
     `;
 
-    const generalIds = cfg.general.map((g, i) => `fpc-gen-${i}`).join(",");
-
     this.shadowRoot.innerHTML = `
       ${style}
       <ha-card class="fpc">
@@ -782,7 +792,13 @@ class FamilyPlannerCard extends HTMLElement {
       this._shareWeek();
     });
 
-    // Global pointerup fångar drag-avslut även om man släpper utanför en cell
+    // Global pointerup fångar drag-avslut även om man släpper utanför en cell.
+    // _render() kan köras flera gånger på samma instans (t.ex. varje gång
+    // setConfig anropas igen under redigering) - ta bort en ev. tidigare
+    // lyssnare först så de inte staplas på document.
+    if (this._onPointerUp) {
+      document.removeEventListener("pointerup", this._onPointerUp);
+    }
     this._onPointerUp = () => this._finishDrag();
     document.addEventListener("pointerup", this._onPointerUp);
 
@@ -844,9 +860,9 @@ class FamilyPlannerCard extends HTMLElement {
     const sources = this._calendarSources();
     const lines = [cfg.title, ""];
 
-    cfg.persons.forEach((p) => {
+    cfg.persons.forEach((p, idx) => {
       const { name } = this._personDisplay(p);
-      const src = sources.find((s) => s.key === `person:${p.name}`);
+      const src = sources.find((s) => s.key === `person:${idx}`);
       lines.push(name + ":");
       weekDates.forEach((dateIso, i) => {
         const events = src ? this._weekDayEvents([src], dateIso) : [];
@@ -1084,9 +1100,9 @@ class FamilyPlannerCard extends HTMLElement {
       };
 
       const rows = cfg.persons
-        .map((p) => {
+        .map((p, idx) => {
           const { name } = this._personDisplay(p);
-          const src = sources.find((s) => s.key === `person:${p.name}`);
+          const src = sources.find((s) => s.key === `person:${idx}`);
           const cells = weekDates
             .map((dateIso, i) => {
               const events = src ? this._weekDayEvents([src], dateIso) : [];

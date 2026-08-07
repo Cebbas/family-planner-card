@@ -1,12 +1,20 @@
 """The Family Planner integration.
 
-Server-side counterpart to the Family Planner Card/panel: stores the
-shared family configuration (persons, calendars, icon keywords) in
-Home Assistant's own storage (shared between everyone on this HA
-instance, not tied to a single browser/user like the earlier
-frontend/user_data-based approach was), exposes it over two small
-websocket commands, and registers the "Familjeplanering" sidebar panel
-itself so it works regardless of how the card was installed.
+Bundles and serves both Family Planner Card and its "Familjeplanering"
+sidebar panel from this single integration, so installing it is the
+only step needed:
+
+- Registers its own static path under www/ and auto-injects the card
+  as a frontend module on every page (add_extra_js_url) - no manual
+  Lovelace resource to add.
+- Registers the sidebar panel itself, serving the panel JS from the
+  same static path - no manual panel_custom: block in
+  configuration.yaml.
+- Stores the shared family configuration (persons, calendars, icon
+  keywords) in Home Assistant's own storage, shared between everyone
+  on this HA instance (not tied to a single browser/user the way the
+  earlier frontend/user_data-based approach was), exposed over two
+  small websocket commands the card and panel both call.
 """
 from __future__ import annotations
 
@@ -21,7 +29,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    CARD_FILENAME,
     DOMAIN,
+    PANEL_FILENAME,
     PANEL_ICON,
     PANEL_TITLE,
     PANEL_URL_PATH,
@@ -42,13 +52,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_config)
     websocket_api.async_register_command(hass, ws_save_config)
 
+    # Ladda kortet på varje frontend-sida automatiskt - motsvarar att
+    # lägga till det som en Lovelace-resurs manuellt.
+    frontend.add_extra_js_url(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
+
     await async_register_panel(
         hass,
         frontend_url_path=PANEL_URL_PATH,
         webcomponent_name="family-planner-panel",
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
-        module_url=f"{STATIC_URL_BASE}/family-planner-panel.js",
+        module_url=f"{STATIC_URL_BASE}/{PANEL_FILENAME}",
         embed_iframe=False,
         trust_external_script=True,
         require_admin=False,
@@ -61,11 +75,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Family Planner config entry."""
     hass.data.pop(DOMAIN, None)
     frontend.async_remove_panel(hass, PANEL_URL_PATH)
+    # frontend har inget publikt sätt att ta bort en extra-js-url igen -
+    # den ligger kvar tills nästa omstart av HA, vilket är ofarligt
+    # (kortet finns kvar på disk tills dess).
     return True
 
 
 async def _async_register_static_path(hass: HomeAssistant) -> None:
-    """Serve family-planner-panel.js from this integration's own www/ folder."""
+    """Serve the card + panel JS from this integration's own www/ folder."""
     try:
         # Nyare HA-kärnor: icke-blockerande registrering.
         from homeassistant.components.http import StaticPathConfig

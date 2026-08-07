@@ -53,12 +53,13 @@
  *     icon: mdi:trash-can
  *
  * -----------------------------------------------------------------------
- * Installation:
- *   1. Lägg family-planner-card.js i /config/www/
- *   2. Lägg till som Lovelace-resurs:
- *        Inställningar -> Instrumentpaneler -> Resurser -> Lägg till resurs
- *        URL: /local/family-planner-card.js   Typ: JavaScript-modul
- *   3. Lägg till kortet i ditt dashboard med YAML enligt exemplet ovan.
+ * Installation: den här filen serveras och laddas automatiskt av den
+ * medföljande Home Assistant-integrationen
+ * (custom_components/family_planner) - installera den (HACS-kategorin
+ * "Integration", eller manuellt) och lägg till den under Inställningar
+ * → Enheter & tjänster → Lägg till integration → "Family Planner".
+ * Ingen manuell Lovelace-resurs behövs. Lägg sedan till kortet i ditt
+ * dashboard med YAML enligt exemplet ovan.
  */
 
 const DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];

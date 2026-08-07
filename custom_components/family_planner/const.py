@@ -9,7 +9,9 @@ PANEL_URL_PATH = "family-planner"
 PANEL_TITLE = "Familjeplanering"
 PANEL_ICON = "mdi:account-group"
 
-# Serverar www/ under den här integrationens egen statiska sökväg, så
-# panelen laddas oavsett hur repot installerades (HACS laddar bara ner
-# family-planner-card.js för "Dashboard"-kategorin, inte hela repot).
+# Serverar www/ (kortet + panelen) under den här integrationens egen
+# statiska sökväg, så båda laddas oavsett hur repot installerades -
+# ingen manuell Lovelace-resurs eller panel_custom-rad behövs.
 STATIC_URL_BASE = "/api/family_planner/static"
+CARD_FILENAME = "family-planner-card.js"
+PANEL_FILENAME = "family-planner-panel.js"

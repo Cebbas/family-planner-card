@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Family Planner",
+        "description": "Adds the \"Familjeplanering\" sidebar panel and a shared storage location for the family's persons, calendars and icon keywords, which Family Planner Card can read automatically."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Family Planner is already configured - only a single instance is needed."
+    }
+  }
+}

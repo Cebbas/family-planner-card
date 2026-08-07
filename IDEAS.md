@@ -23,12 +23,18 @@ profilbild (`entity_picture`) automatiskt istället för manuellt
 namn/ikon, med fallback till mdi-ikon om ingen bild finns.
 
 ## Sidopanel för central konfiguration
-✅ Klar. `family-planner-panel.js` registreras via `panel_custom` och ger
-en egen sida i HA:s sidomeny för att bygga upp personer/delade
-kalendrar/globala ikon-nyckelord. Sparas via HA:s `frontend/user_data`-
-API (delat per HA-användare, ingen extra helper-entitet). Kort vars YAML
-utelämnar `persons` helt hämtar därifrån automatiskt istället för att
-kräva `persons` lokalt i varje kort.
+✅ Klar, och sedan uppgraderad till en riktig integration
+(`custom_components/family_planner`) istället för en ren frontend-lösning
+- HACS laddar bara ner den fil som pekas ut i `hacs.json` för
+"Dashboard"-kategorin, så en fristående panel-JS-fil i samma repo följde
+aldrig med automatiskt, och `frontend/user_data` var dessutom knutet till
+en enskild HA-användare istället för delat mellan hela familjen.
+Integrationen registrerar panelen och serverar dess JS själv (egen
+statisk sökväg), och sparar i HA:s egen storage
+(`.storage/family_planner_config`) via två websocket-kommandon
+(`family_planner/get_config`/`save_config`). Installeras som en andra
+HACS-kategori ("Integration") av samma repo, sätts upp via
+Inställningar → Enheter & tjänster.
 
 Naturligt nästa steg: låta panelen även redigera fler av kortets globala
 inställningar (väder, TTS, semestermarkering) om man vill undvika att

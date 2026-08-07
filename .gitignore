@@ -1,2 +1,4 @@
 skärmavbildningar/
 *.mov
+__pycache__/
+*.pyc

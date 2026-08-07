@@ -11,9 +11,10 @@ En egen Lovelace-card till Home Assistant med:
   `calendar_entity` — samma kalender som driver månadsvyn. Kalendrar som
   inte hör till en person (t.ex. en delad familjekalender) samlas i en
   extra delad rad.
-- **Sidopanel** (valfri): en egen sida i HA:s sidomeny där du bygger upp
-  personer/kalendrar/ikon-nyckelord på ett ställe, delat mellan hur många
-  kort som helst utan att kopiera YAML — se
+- **Sidopanel** (valfri, kräver den medföljande integrationen): en egen
+  sida i HA:s sidomeny där du bygger upp personer/kalendrar/
+  ikon-nyckelord på ett ställe, delat mellan hur många kort som helst
+  utan att kopiera YAML — se
   [Sidopanel för central konfiguration](#sidopanel-för-central-konfiguration-delad-mellan-flera-kort).
 
 > **Uppgraderar du från en äldre version?** Se
@@ -47,6 +48,12 @@ Framtida uppdateringar syns som vanligt i HACS när nya releaser skapas.
    - URL: `/local/family-planner-card.js`
    - Typ: `JavaScript-modul`
 3. Ladda om dashboarden (eller HA), lägg sedan till kortet.
+
+Detta räcker för att använda kortet fristående (`persons` i kortets egen
+YAML). Vill du istället bygga upp personer/kalendrar på **ett ställe**
+delat mellan flera kort/dashboards, installera även den medföljande
+integrationen — se
+[Sidopanel för central konfiguration](#sidopanel-för-central-konfiguration-delad-mellan-flera-kort).
 
 ## Exempel-konfiguration
 
@@ -372,44 +379,39 @@ textfält för entity_id.
 ## Sidopanel för central konfiguration (delad mellan flera kort)
 
 Om du vill lägga kortet på flera dashboards utan att upprepa hela
-person-/kalenderuppsättningen i varje kort-YAML, finns en fristående
-sidopanel (`family-planner-panel.js`) där du bygger upp personer,
-delade kalendrar och globala ikon-nyckelord på **ett** ställe. Den
-sparar via Home Assistants inbyggda `frontend/user_data`-API - samma
-mekanism HA:s egen frontend använder för användarinställningar - så
-ingen extra integration eller helper-entitet behövs.
+person-/kalenderuppsättningen i varje kort-YAML finns en fristående
+sidopanel där du bygger upp personer, delade kalendrar och globala
+ikon-nyckelord på **ett** ställe.
+
+Panelen levereras av en riktig Home Assistant-**integration**
+(`custom_components/family_planner`), inte bara en JS-fil. Det löser två
+saker en ren frontend-lösning inte kan:
+
+- **Tillförlitlig laddning.** Integrationen registrerar panelen och
+  serverar dess JS-fil själv, från sin egen statiska sökväg. Ingen
+  manuell `panel_custom`-rad i `configuration.yaml`, och inget beroende
+  av att HACS råkar ladda ner rätt filer.
+- **Delad lagring.** Datan sparas i Home Assistants egen storage
+  (`.storage/family_planner_config`) - gemensam för alla som loggar in
+  på din HA-instans, inte knuten till en enskild inloggad
+  användare/webbläsare.
 
 ### Installation
 
-`family-planner-panel.js` ligger i samma repo som kortet, men **HACS
-laddar bara ner den fil som pekas ut i `hacs.json`** (kortets egen JS-fil)
-- inte hela repot. Panelen finns alltså inte automatiskt under
-`/hacsfiles/...` även om du installerat kortet via HACS, och
-`panel_custom` ger då felet "Unable to load custom panel". Lägg därför
-alltid panelen manuellt, oavsett hur du installerade kortet:
-
-1. Hämta filen: `https://raw.githubusercontent.com/Cebbas/family-planner-card/main/family-planner-panel.js`
-2. Lägg den i `/config/www/` (t.ex. via Samba/Studio Code Server, samma
-   sätt som i den manuella kort-installationen ovan).
-3. Lägg till i `configuration.yaml`:
-
-```yaml
-panel_custom:
-  - name: family-planner-panel
-    sidebar_title: Familjeplanering
-    sidebar_icon: mdi:account-group
-    module_url: /local/family-planner-panel.js
-    embed_iframe: false
-    trust_external_script: true
-```
-
-Starta sedan om Home Assistant. En ny länk **"Familjeplanering"** dyker
-upp i sidomenyn. Öppna panelen, bygg upp personer/kalendrar/
-ikon-nyckelord och klicka **Spara**.
-
-Uppdaterar du kortet senare via HACS, kom ihåg att då och då ladda ner
-`family-planner-panel.js` på nytt manuellt också om du gjort ändringar i
-den filen sedan sist.
+1. Lägg till repot i HACS **en gång till**, den här gången som
+   kategorin **Integration** (samma repo-URL som för kortet:
+   `https://github.com/Cebbas/family-planner-card`).
+   - HACS → tre punkter → Anpassade repositories → klistra in URL:en →
+     välj kategori **Integration**.
+   - Sök upp "Family Planner" i HACS och klicka **Ladda ner**.
+   - (Manuellt alternativ: kopiera hela mappen
+     `custom_components/family_planner/` till `/config/custom_components/`.)
+2. **Starta om Home Assistant.**
+3. Gå till **Inställningar → Enheter & tjänster → Lägg till integration**,
+   sök på **"Family Planner"** och lägg till den. Ingen konfiguration
+   behövs - klicka bara igenom den enda bekräftelserutan.
+4. En ny länk **"Familjeplanering"** dyker upp i sidomenyn. Öppna den,
+   bygg upp personer/kalendrar/ikon-nyckelord och klicka **Spara**.
 
 ### Använda den delade konfigurationen i ett kort
 
@@ -421,13 +423,14 @@ title: Familjeplanering
 ```
 
 Så fort `persons` saknas helt hämtar kortet automatiskt `persons`,
-`calendars`, `calendars_label` och `icon_keywords` från panelens sparade
-data (cachas 5 minuter). Övriga inställningar (titel, nedräkningar,
-väder, allmänna sensorer, TTS, m.m.) är fortfarande lokala per kort/
-dashboard, så olika dashboards kan visa samma familj på olika sätt.
+`calendars`, `calendars_label` och `icon_keywords` från integrationens
+sparade data (cachas 5 minuter). Övriga inställningar (titel,
+nedräkningar, väder, allmänna sensorer, TTS, m.m.) är fortfarande lokala
+per kort/dashboard, så olika dashboards kan visa samma familj på olika
+sätt.
 
 Anger du `persons` lokalt i kortets YAML används den istället, som
-tidigare - panelen är helt valfri.
+tidigare - integrationen och panelen är helt valfria.
 
 ## Uppgradera från tidigare version
 
@@ -446,14 +449,24 @@ change):
 - Nytt toppnivå-fält `calendars` för kalendrar utan koppling till en
   person, plus `calendars_label` för radnamnet de får i veckoschemat.
 - Nytt valfritt fält `icon_keywords` per person (matchar före de globala).
-- Ny valfri sidopanel (`family-planner-panel.js`) för att sätta upp
-  personer/kalendrar på ett ställe - se
+- Ny valfri sidopanel för att sätta upp personer/kalendrar på ett
+  ställe, levererad av en riktig integration
+  (`custom_components/family_planner`) - se
   [Sidopanel för central konfiguration](#sidopanel-för-central-konfiguration-delad-mellan-flera-kort).
 
 Gamla konfigurationer med `entity`/`week_entity` ger inget fel, men de
 fälten läses inte längre — uppdatera din kort-YAML enligt exemplet högre
 upp, eller använd den visuella editorn som redan är byggd för det nya
 formatet.
+
+> Körde du en tidigare version av sidopanelen (en fristående
+> `family-planner-panel.js` + manuell `panel_custom`-rad i
+> `configuration.yaml`)? Den är ersatt av integrationen ovan - ta bort
+> `panel_custom`-blocket ur `configuration.yaml` och installera
+> integrationen istället. Eventuell tidigare sparad data låg i din
+> HA-användares `frontend/user_data` och följer inte med automatiskt -
+> bygg upp personerna på nytt i den nya panelen (troligen snabbt gjort
+> om du bara hann testa lite).
 
 ## Idéer för vidare utveckling
 

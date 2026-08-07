@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Family Planner",
+        "description": "Lägger till sidopanelen \"Familjeplanering\" och en delad lagringsplats för familjens personer, kalendrar och ikon-nyckelord, som Family Planner Card kan läsa automatiskt."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Family Planner är redan konfigurerat - bara en instans behövs."
+    }
+  }
+}

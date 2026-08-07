@@ -4,37 +4,22 @@
  * Fristående sida i Home Assistants sidopanel för att bygga upp den
  * "delade" konfigurationen (personer, kalendrar, ikon-nyckelord) som
  * Family Planner Card kan läsa automatiskt när kortets egen YAML INTE
- * anger 'persons'. Sparas via HA:s inbyggda frontend/user_data-API
- * (samma mekanism HA:s egen frontend använder för användarinställningar)
- * - ingen extra integration eller helper-entitet behövs.
+ * anger 'persons'.
  *
- * -----------------------------------------------------------------------
- * Installation:
+ * Den här filen serveras och registreras av den medföljande Python-
+ * integrationen (custom_components/family_planner) - installera den via
+ * HACS (kategori "Integration") eller manuellt, lägg till den under
+ * Inställningar → Enheter & tjänster → Lägg till integration →
+ * "Family Planner", så sköter integrationen resten (statisk sökväg +
+ * sidopanel-registrering). Ingen manuell panel_custom-rad i
+ * configuration.yaml behövs.
  *
- * 0. Lägg family-planner-panel.js i /config/www/ manuellt - HACS laddar
- *    bara ner kortets egen JS-fil (den som pekas ut i hacs.json), inte
- *    hela repot, så den här filen följer INTE automatiskt med en
- *    HACS-installation av kortet.
- *
- * 1. Lägg till i configuration.yaml:
- *
- *    panel_custom:
- *      - name: family-planner-panel
- *        sidebar_title: Familjeplanering
- *        sidebar_icon: mdi:account-group
- *        module_url: /local/family-planner-panel.js
- *        embed_iframe: false
- *        trust_external_script: true
- *
- * 2. Starta om Home Assistant. En ny länk "Familjeplanering" dyker upp
- *    i sidomenyn.
- *
- * 3. Lägg till Family Planner Card på valfri dashboard UTAN 'persons' i
- *    dess YAML (t.ex. bara `type: custom:family-planner-card`) - kortet
- *    hämtar då personer/kalendrar/ikon-nyckelord härifrån automatiskt.
+ * Data sparas via websocket-kommandona family_planner/get_config och
+ * family_planner/save_config, som integrationen registrerar - lagras i
+ * HA:s egen storage (.storage/family_planner_config), delat mellan alla
+ * användare på instansen (till skillnad från frontend/user_data, som är
+ * knutet till en enskild inloggad användare).
  */
-
-const FPP_SHARED_CONFIG_KEY = "family_planner_config";
 
 function fpcEsc(str) {
   return String(str == null ? "" : str)
@@ -99,7 +84,7 @@ class FamilyPlannerPanel extends HTMLElement {
 
   async _load() {
     try {
-      const result = await this._hass.callWS({ type: "frontend/get_user_data", key: FPP_SHARED_CONFIG_KEY });
+      const result = await this._hass.callWS({ type: "family_planner/get_config" });
       const value = result && result.value;
       if (value) {
         this._data = {
@@ -122,8 +107,7 @@ class FamilyPlannerPanel extends HTMLElement {
     this._updateStatus();
     try {
       await this._hass.callWS({
-        type: "frontend/set_user_data",
-        key: FPP_SHARED_CONFIG_KEY,
+        type: "family_planner/save_config",
         value: this._data,
       });
       this._dirty = false;

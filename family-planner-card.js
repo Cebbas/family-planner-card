@@ -61,11 +61,6 @@
  *   3. Lägg till kortet i ditt dashboard med YAML enligt exemplet ovan.
  */
 
-// Nyckel i Home Assistants "frontend user data"-lagring (samma mekanism
-// HA:s egen frontend använder för användarinställningar) - måste matcha
-// nyckeln i family-planner-panel.js.
-const FPC_SHARED_CONFIG_KEY = "family_planner_config";
-
 const DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 const DAY_LABELS = ["Mån", "Tis", "Ons", "Tor", "Fre", "Lör", "Sön"];
 
@@ -276,8 +271,12 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeLoadSharedConfig();
   }
 
-  // Hämtar personer/kalendrar/ikon-nyckelord från sidopanelens delade
-  // konfiguration (frontend/user_data) när 'persons' inte anges lokalt.
+  // Hämtar personer/kalendrar/ikon-nyckelord från Family Planner-
+  // integrationens delade lagring när 'persons' inte anges lokalt.
+  // Kräver att custom_components/family_planner är installerad och
+  // tillagd (Inställningar → Enheter & tjänster → Family Planner) -
+  // annars är family_planner/get_config ett okänt kommando och vi
+  // hamnar tyst i catch-blocket nedan (visas som "inga personer").
   async _maybeLoadSharedConfig() {
     if (!this._usesSharedConfig || !this._hass) return;
     if (this._sharedConfigLoading) return;
@@ -287,10 +286,7 @@ class FamilyPlannerCard extends HTMLElement {
 
     this._sharedConfigLoading = true;
     try {
-      const result = await this._hass.callWS({
-        type: "frontend/get_user_data",
-        key: FPC_SHARED_CONFIG_KEY,
-      });
+      const result = await this._hass.callWS({ type: "family_planner/get_config" });
       const data = (result && result.value) || {};
       this._config.persons = this._normalizePersons(data.persons);
       this._config.calendars = this._normalizeCalendars(data.calendars);

@@ -64,7 +64,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sidebar_icon=PANEL_ICON,
         module_url=f"{STATIC_URL_BASE}/{PANEL_FILENAME}",
         embed_iframe=False,
-        trust_external_script=True,
+        trust_external=True,
         require_admin=False,
     )
 

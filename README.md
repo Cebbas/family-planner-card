@@ -12,10 +12,15 @@ som levererar en Lovelace-card + en sidopanel i ett paket:
   `calendar_entity` — samma kalender som driver månadsvyn. Kalendrar som
   inte hör till en person (t.ex. en delad familjekalender) samlas i en
   extra delad rad.
-- **Sidopanel** ("Familjeplanering" i sidomenyn): bygg upp personer,
-  delade kalendrar och globala ikon-nyckelord på **ett** ställe, delat
-  mellan hur många kort/dashboards som helst — se
-  [Sidopanelen och delad konfiguration](#sidopanelen-och-delad-konfiguration).
+- **Sidopanel** ("Familjeplanering" i sidomenyn): bygg upp **all**
+  konfiguration (titel, nedräkningar, väder, personer, delade kalendrar,
+  ikon-nyckelord, månadskalender, semestermarkering, TTS, allmänna
+  sensorer) på **ett** ställe, delat mellan hur många kort/dashboards
+  som helst — se
+  [Sidopanelen](#sidopanelen).
+
+Kortet självt har ingen egen konfiguration — `type: custom:family-planner-card`
+räcker. Allt sätts upp i sidopanelen.
 
 Integrationen installeras **en gång** och sköter resten själv: kortet
 laddas automatiskt på alla dashboards (ingen manuell Lovelace-resurs),
@@ -55,79 +60,33 @@ uppdatera, starta om HA, klart.
 2. Starta om Home Assistant.
 3. Lägg till integrationen som i steg 5 ovan.
 
-## Exempel-konfiguration
+## Lägga till kortet
+
+Kortet tar ingen konfiguration - lägg till det på valfritt dashboard med:
 
 ```yaml
 type: custom:family-planner-card
-title: Familjeplanering
-start_collapsed: false
-countdowns:
-  max_shown: 5          # hur många som visas normalt (sorterat på närmast i tid)
-  items:
-    - entity: sensor.jul
-      name: Jul
-      pinned: true       # visas alltid, även om den inte är bland de 5 närmaste
-    - entity: sensor.sommarlov
-      name: Sommarlov
-    - entity: sensor.annas_fodelsedag
-      name: Annas födelsedag
-weather:
-  entity: weather.hemma
-  show_week: true        # visar en väderrad (ikon + temp) överst i veckoschemat
-icon_keywords:
-  - match: fotboll
-    icon: ⚽
-  - match: skola
-    icon: 🏫
-  - match: tandläkare
-    icon: mdi:tooth
-show_month_calendar: true   # kalender i månadsvy under veckoschemat
-vacation_keywords:
-  - match: lov
-    color: "#c8f7c5"        # färgar hela dagen i månadskalendern
-tts:
-  tts_entity: tts.piper     # entitet av typen tts.*
-  media_player: media_player.kok  # högtalaren uppläsningen skickas till
-persons:
-  - name: Anna                     # valfri om person_entity är satt
-    person_entity: person.anna     # valfri - hämtar namn + profilbild från HA
-    entities:                      # valfri lista, en rad per sensor i Idag-vyn
-      - sensor.anna_skola
-      - sensor.anna_fritids
-    calendar_entity: calendar.anna # driver både vecka och månad
-    icon: mdi:account
-    color: "#e17055"
-  - name: Erik
-    entities:
-      - sensor.erik_idag
-    calendar_entity: calendar.erik
-    icon: mdi:account
-    color: "#0984e3"
-calendars:                          # kalendrar utan koppling till en person
-  - entity: calendar.familj
-    name: Familj
-    color: "#95a5a6"
-calendars_label: Övrigt             # radnamn för "calendars" i veckoschemat
-general:
-  - entity: binary_sensor.tvattmaskin
-    name: Tvätt
-    icon: mdi:washing-machine
-  - entity: binary_sensor.sopor_imorgon
-    name: Sopor
-    icon: mdi:trash-can
 ```
+
+Öppna sedan sidopanelen **"Familjeplanering"** i sidomenyn för att sätta
+upp titel, nedräkningar, väder, personer, kalendrar, ikon-nyckelord,
+månadskalender, semestermarkering, TTS och allmänna sensorer - se
+[Sidopanelen](#sidopanelen). Alla kort på instansen visar samma data.
 
 ## Nedräkningsraden (överst)
 
-Lista valfritt antal `items` under `countdowns`. Varje `entity`s `state`
-ska vara ett datum (`YYYY-MM-DD`, funkar även med fullt datetime). Kortet
-räknar ut antal dagar kvar och sorterar automatiskt på närmast i tid.
+Lägg till valfritt antal nedräkningar under **Nedräkningar** i
+sidopanelen: en entity-picker, ett namn och en "Visa alltid"-kryssruta
+per post. Varje entitets `state` ska vara ett datum (`YYYY-MM-DD`,
+funkar även med fullt datetime). Kortet räknar ut antal dagar kvar och
+sorterar automatiskt på närmast i tid.
 
-- `max_shown` styr hur många som visas normalt (default 5).
-- `pinned: true` gör att en post **alltid** visas, även om den inte är
-  bland de `max_shown` närmaste — den läggs till extra och hela raden
-  sorteras sedan om på dagar kvar. Fungerar även för redan passerade datum
-  (visar "X dagar sedan").
+- "Hur många nedräkningar som visas normalt" styr hur många som visas
+  (default 5).
+- "Visa alltid" gör att en post **alltid** visas, även om den inte är
+  bland de närmaste — den läggs till extra och hela raden sorteras sedan
+  om på dagar kvar. Fungerar även för redan passerade datum (visar "X
+  dagar sedan").
 - Poster utan giltigt datum eller med ogiltig entitet hoppas över tyst.
 
 Exempel på sensor:
@@ -141,11 +100,12 @@ template:
 
 ## Väderrad
 
-Ange en `weather.*`-entitet under `weather.entity` för att visa aktuell
-temperatur + ikon i en liten rad direkt under nedräkningarna.
+Välj en `weather.*`-entitet under **Väder** i sidopanelen för att visa
+aktuell temperatur + ikon i en liten rad direkt under nedräkningarna.
 
-Sätt `weather.show_week: true` för att även få en väderrad överst i
-veckoschemat, med ikon + avrundad temperatur per dag. Den hämtar prognosen
+Kryssa i "Visa väderprognos för veckans dagar" för att även få en
+väderrad överst i veckoschemat, med ikon + avrundad temperatur per dag.
+Den hämtar prognosen
 via `weather.get_forecasts` (samma tjänst som HA:s egna väderkort använder)
 och matchar varje prognospost mot rätt veckodagskolumn. Dagar utan
 prognosdata (t.ex. redan passerade dagar i veckan, eller dagar längre bort
@@ -156,7 +116,8 @@ spammar väder-API:et.
 
 ## Ikon-nyckelord (matcha ord i händelser mot en ikon)
 
-Lista `icon_keywords` med `match` (ord/fras) och `icon`. `icon` kan vara:
+Lägg till globala ikon-nyckelord i sidopanelen: ett ord/fras att matcha
+plus en ikon. Ikonen kan vara:
 
 - en emoji, t.ex. `⚽`
 - en `mdi:`-ikon, t.ex. `mdi:tooth`
@@ -168,18 +129,6 @@ visar badgen (ikon/emoji/bild) framför texten — både i "Idag"-raden och i
 varje cell i veckoschemat. Första träffen i listan vinner om flera ord
 matchar samma text.
 
-```yaml
-icon_keywords:
-  - match: fotboll
-    icon: ⚽
-  - match: skola
-    icon: 🏫
-  - match: tandläkare
-    icon: mdi:tooth
-  - match: simskola
-    icon: /local/icons/simskola.png
-```
-
 Så om en persons "idag"-sensor har state `"Fotbollsträning 17:00"` visas
 ⚽ framför texten automatiskt, utan att du behöver ändra sensorn.
 
@@ -188,35 +137,24 @@ pekar på dem som `/local/dinbild.png`.
 
 ### Person-specifika ikon-nyckelord
 
-Varje person kan ha en egen `icon_keywords`-lista som matchar **före**
-den globala — perfekt för att samma ord ska ge olika bild beroende på
-vem det gäller, t.ex. respektive barns egna lagbild vid "Fotbollsträning":
-
-```yaml
-persons:
-  - name: Sebastian
-    icon_keywords:
-      - match: fotboll
-        icon: /local/icons/sebastians_lag.png
-  - name: Elis
-    icon_keywords:
-      - match: fotboll
-        icon: /local/icons/elis_lag.png
-```
+Varje person i sidopanelen kan ha en egen lista med ikon-nyckelord som
+matchar **före** de globala — perfekt för att samma ord ska ge olika
+bild beroende på vem det gäller, t.ex. respektive barns egna lagbild vid
+"Fotbollsträning". Lägg till dem under personens kort i sidopanelen.
 
 Matchar inget av personens egna nyckelord provas de globala
-`icon_keywords` som vanligt.
+ikon-nyckelorden som vanligt.
 
 ## Månadskalender
 
-Under veckoschemat finns nu en riktig kalender i månadsvy, aktiverad som
-standard (`show_month_calendar: true`). Bläddra mellan månader med `‹`/`›`
-— den öppnas alltid på innevarande månad.
+Under veckoschemat finns en riktig kalender i månadsvy, aktiverad som
+standard (kryssrutan i sidopanelens **Månadskalender**-sektion). Bläddra
+mellan månader med `‹`/`›` — den öppnas alltid på innevarande månad.
 
-Lägg till `calendar_entity` (en vanlig `calendar.*`-entitet) på de
-personer du vill se i kalendern. Det är en annan sorts källa än
-`entities` — de senare är fria textsensorer du själv fyller i, medan
-`calendar_entity` är en riktig kalender som kortet hämtar events från
+Sätt en kalender-entitet (en vanlig `calendar.*`-entitet) på de personer
+du vill se i kalendern, i sidopanelen. Det är en annan sorts källa än
+"idag"-sensorerna — de senare är fria textsensorer du själv fyller i,
+medan kalender-entiteten är en riktig kalender som kortet hämtar events från
 direkt via Home Assistants kalender-API (fungerar utmärkt med t.ex. en
 sammanslagen cal_combiner-kalender). **Samma `calendar_entity` driver
 både veckoschemat och månadskalendern** — ingen separat vecko-sensor
@@ -233,24 +171,13 @@ veckoschemat) och cachas i 5 minuter.
 ## Delade kalendrar (utan koppling till en person)
 
 Kalendrar som inte hör till en specifik person — en gemensam
-familjekalender, sopschema, eller liknande — läggs under toppnivå-fältet
-`calendars`:
-
-```yaml
-calendars:
-  - entity: calendar.familj
-    name: Familj
-    color: "#95a5a6"
-  - entity: calendar.sopor
-    name: Sopor
-    color: "#5f9ea0"
-calendars_label: Övrigt   # radnamn i veckoschemat, default "Övrigt"
-```
+familjekalender, sopschema, eller liknande — läggs till under **Delade
+kalendrar** i sidopanelen (entitet, namn och färg per kalender), plus ett
+radnamn för dem i veckoschemat (default "Övrigt").
 
 Alla kalendrar i listan visas i månadskalendern precis som personers
 kalendrar (egna filter-chips och prickar), men i veckoschemat samlas de
-i **en enda delad rad** (namnet styrs av `calendars_label`) istället för
-en rad var.
+i **en enda delad rad** istället för en rad var.
 
 ## Notis-badge i headern
 
@@ -269,8 +196,9 @@ mor-/farföräldrar eller barnvakt.
 
 ## Röstuppläsning (TTS)
 
-Sätt `tts.tts_entity` (en `tts.*`-entitet) och `tts.media_player` för att
-få en högtalarikon i headern. Ett klick bygger ihop en mening av alla
+Sätt en `tts.*`-entitet och en högtalare (`media_player.*`) under
+**Röstuppläsning (TTS)** i sidopanelen för att få en högtalarikon i
+headern. Ett klick bygger ihop en mening av alla
 personers "idag"-text plus eventuella aktiva allmänna sensorer, och kör
 `tts.speak` mot vald högtalare — bra att koppla till en knapp i
 morgonrutinen. Kräver en TTS-integration konfigurerad i HA (t.ex. Piper,
@@ -278,10 +206,11 @@ Google Translate, eller Amazon Polly).
 
 ## Semestermarkering i månadskalendern
 
-Lista `vacation_keywords` med `match` (ord) och `color` (hex-färg).
-Matchas mot alla händelsers titlar den dagen (över alla personers
-kalendrar), och om något matchar färgas hela dagcellen i månadskalendern
-med den färgen — bra för att visa skolans lovdagar direkt i vyn.
+Lägg till semestermarkeringar i sidopanelen: ett ord att matcha och en
+hex-färg. Matchas mot alla händelsers titlar den dagen (över alla
+personers kalendrar), och om något matchar färgas hela dagcellen i
+månadskalendern med den färgen — bra för att visa skolans lovdagar
+direkt i vyn.
 
 ## Filtrera kalendrar (vecka + månad)
 
@@ -308,19 +237,11 @@ tyst och formuläret ligger kvar öppet.
 
 ## Hur "Idag"-texten fylls i
 
-`entities` för varje person är en lista med **valfria entiteter** — kortet
-visar `state` för var och en, en rad per sensor. Sensorer vars state är
-tomt/okänt hoppas över (om alla är tomma visas en enda "Inget planerat
-idag"-rad). Enklast är `template`-sensorer du själv definierar, t.ex.
-baserat på dina cal_combiner-kalendrar:
-
-```yaml
-persons:
-  - name: Anna
-    entities:
-      - sensor.anna_skola
-      - sensor.anna_fritids
-```
+"Idag-sensorer" för varje person i sidopanelen är en lista med
+**valfria entiteter** — kortet visar `state` för var och en, en rad per
+sensor. Sensorer vars state är tomt/okänt hoppas över (om alla är tomma
+visas en enda "Inget planerat idag"-rad). Enklast är `template`-sensorer
+du själv definierar, t.ex. baserat på dina cal_combiner-kalendrar:
 
 ```yaml
 template:
@@ -346,66 +267,47 @@ raden.
 
 ## Allmänna raden (idag)
 
-Lista valfritt antal entiteter under `general`. Bara de som just nu har
-state `on` visas som en rund ikon-badge med namn under. Fungerar bra med
+Lägg till valfritt antal entiteter under **Allmänna sensorer** i
+sidopanelen (entitet, namn, ikon). Bara de som just nu har state `on`
+visas som en rund ikon-badge med namn under. Fungerar bra med
 `binary_sensor`-entiteter, t.ex. från din activity-sensor-funktion i
 cal_combiner.
 
-## Visuell editor
-
-Kortet har nu en egen visuell editor (`getConfigElement`), så du slipper
-skriva YAML för hand om du inte vill. Lägg till kortet via **Lägg till
-kort → Family Planner Card** i dashboarden, så visas formuläret automatiskt
-med:
-
-- Titel och "starta ihopfälld"-kryssruta
-- Nedräkningar: antal som visas + lista med entity-picker, namn och en
-  "Visa alltid"-kryssruta (motsvarar `pinned`)
-- Personer: namn, valfri koppling till en HA-`person.*`-entitet, en
-  ombyggbar lista med "idag"-sensorer, kalender (vecka + månad), ikon
-  och färg
-- Delade kalendrar: radnamn i veckoschemat + en lista med
-  kalender-entitet, namn och färg
-- Allmänna sensorer: entitet, namn och ikon
-
-Alla listor har egna "+ Lägg till..."-knappar och en ✕ för att ta bort
-rader. Ändringar sparas direkt i kortets YAML-konfiguration i bakgrunden,
-så du kan fortfarande finputsa i YAML-läget om du vill.
-
-Editorn använder `ha-entity-picker` om den är laddad i din frontend
-(vilket den normalt är), annars faller den tillbaka på ett vanligt
-textfält för entity_id.
-
-## Sidopanelen och delad konfiguration
+## Sidopanelen
 
 Sidopanelen **"Familjeplanering"** dyker upp i sidomenyn så fort
 integrationen är installerad (se [Installation](#installation) högst
-upp) - inget extra steg behövs för att få fram själva panelen. Öppna
-den, bygg upp personer, delade kalendrar och globala ikon-nyckelord och
-klicka **Spara**. Datan lagras i Home Assistants egen storage
+upp) - inget extra steg behövs för att få fram själva panelen. Den är
+den **enda** platsen att konfigurera Family Planner Card på: titel,
+nedräkningar, väder, personer, delade kalendrar, globala ikon-nyckelord,
+månadskalender, semestermarkering, TTS och allmänna sensorer. Bygg upp
+allt och klicka **Spara**.
+
+Datan lagras i Home Assistants egen storage
 (`.storage/family_planner_config`), delad mellan alla som loggar in på
-din HA-instans.
+din HA-instans **och** alla Family Planner-kort du lägger till - lägg
+till kortet på så många dashboards du vill, de visar alla samma data
+(cachas 5 minuter per kort).
 
-### Använda den delade konfigurationen i ett kort
-
-Lägg till kortet **utan** `persons` i dess YAML:
-
-```yaml
-type: custom:family-planner-card
-title: Familjeplanering
-```
-
-Så fort `persons` saknas helt hämtar kortet automatiskt `persons`,
-`calendars`, `calendars_label` och `icon_keywords` från integrationens
-sparade data (cachas 5 minuter). Övriga inställningar (titel,
-nedräkningar, väder, allmänna sensorer, TTS, m.m.) är fortfarande lokala
-per kort/dashboard, så olika dashboards kan visa samma familj på olika
-sätt.
-
-Anger du `persons` lokalt i kortets YAML används den istället, som
-tidigare - integrationen och panelen är helt valfria.
+Panelen använder `ha-entity-picker` om den är laddad i din frontend
+(vilket den normalt är), annars faller den tillbaka på ett vanligt
+textfält för entity_id.
 
 ## Uppgradera från tidigare version
+
+Från och med version 0.4.3 har kortet **ingen egen konfiguration längre**
+(breaking change): `title`, `countdowns`, `weather`, `persons`,
+`calendars`, `calendars_label`, `icon_keywords`, `show_month_calendar`,
+`vacation_keywords`, `tts` och `general` i kortets YAML läses inte
+längre alls - allt hämtas nu från sidopanelen. Om du redan hade
+`persons`/`calendars`/`icon_keywords` sparat i panelen (den delade
+konfigurationen som redan fanns) syns de som vanligt. De inställningar
+du tidigare bara satt i kortets egen YAML (titel, nedräkningar, väder,
+`show_month_calendar`, semestermarkering, TTS, allmänna sensorer) finns
+inte i den sparade panel-datan ännu - öppna sidopanelen och fyll i dem
+där (se [Sidopanelen](#sidopanelen)), annars visas kortet med tomma
+defaultvärden för de fälten. Du kan ta bort alla fält utom `type` ur
+kortets YAML - de ignoreras ändå.
 
 Från och med version 0.1.0 har konfigurationsformatet ändrats (breaking
 change):
@@ -423,13 +325,11 @@ change):
   person, plus `calendars_label` för radnamnet de får i veckoschemat.
 - Nytt valfritt fält `icon_keywords` per person (matchar före de globala).
 - Kortet levereras numera tillsammans med en sidopanel för att sätta upp
-  personer/kalendrar på ett ställe - se
-  [Sidopanelen och delad konfiguration](#sidopanelen-och-delad-konfiguration).
+  all konfiguration på ett ställe - se [Sidopanelen](#sidopanelen).
 
 Gamla konfigurationer med `entity`/`week_entity` ger inget fel, men de
-fälten läses inte längre — uppdatera din kort-YAML enligt exemplet högre
-upp, eller använd den visuella editorn som redan är byggd för det nya
-formatet.
+fälten läses inte längre — sätt upp personerna på nytt i sidopanelen
+istället (se [Sidopanelen](#sidopanelen)).
 
 > **Installerade du kortet innan det flyttade in i
 > `custom_components/family_planner`?** Paketeringen har ändrats två

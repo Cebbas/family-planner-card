@@ -1,10 +1,11 @@
 /*
  * Family Planner Panel
  * -----------------------------------------------------------------------
- * Fristående sida i Home Assistants sidopanel för att bygga upp den
- * "delade" konfigurationen (personer, kalendrar, ikon-nyckelord) som
- * Family Planner Card kan läsa automatiskt när kortets egen YAML INTE
- * anger 'persons'.
+ * Fristående sida i Home Assistants sidopanel för att bygga upp all
+ * konfiguration (titel, nedräkningar, väder, personer, kalendrar,
+ * ikon-nyckelord, månadskalender, semestermarkering, TTS, allmänna
+ * sensorer) som Family Planner Card läser automatiskt - kortet har
+ * ingen egen konfiguration, se dess setConfig()/_maybeLoadSharedConfig().
  *
  * Den här filen serveras och registreras av den medföljande Python-
  * integrationen (custom_components/family_planner) - installera den via
@@ -50,7 +51,7 @@ function renderIconBadge(icon) {
 class FamilyPlannerPanel extends HTMLElement {
   constructor() {
     super();
-    this._data = { persons: [], calendars: [], calendars_label: "Övrigt", icon_keywords: [] };
+    this._data = this._defaultData();
     this._loaded = false;
     this._dirty = false;
     this._saving = false;
@@ -82,16 +83,50 @@ class FamilyPlannerPanel extends HTMLElement {
     this._panel = panel;
   }
 
+  // Delas mellan konstruktorns startläge och _load() - håller defaults på
+  // ett ställe, samma fält som Family Planner Card förväntar sig från
+  // family_planner/get_config (se _maybeLoadSharedConfig i kortet).
+  _defaultData() {
+    return {
+      title: "Familjeplanering",
+      start_collapsed: false,
+      countdowns: { max_shown: 5, items: [] },
+      weather: { entity: "", show_week: false },
+      persons: [],
+      calendars: [],
+      calendars_label: "Övrigt",
+      icon_keywords: [],
+      show_month_calendar: true,
+      vacation_keywords: [],
+      tts: { tts_entity: "", media_player: "" },
+      general: [],
+    };
+  }
+
   async _load() {
     try {
       const result = await this._hass.callWS({ type: "family_planner/get_config" });
       const value = result && result.value;
       if (value) {
+        const countdownCfg = value.countdowns || {};
+        const weatherCfg = value.weather || {};
+        const ttsCfg = value.tts || {};
         this._data = {
+          title: value.title || "Familjeplanering",
+          start_collapsed: !!value.start_collapsed,
+          countdowns: {
+            max_shown: Number.isFinite(countdownCfg.max_shown) ? countdownCfg.max_shown : 5,
+            items: Array.isArray(countdownCfg.items) ? countdownCfg.items : [],
+          },
+          weather: { entity: weatherCfg.entity || "", show_week: !!weatherCfg.show_week },
           persons: Array.isArray(value.persons) ? value.persons : [],
           calendars: Array.isArray(value.calendars) ? value.calendars : [],
           calendars_label: value.calendars_label || "Övrigt",
           icon_keywords: Array.isArray(value.icon_keywords) ? value.icon_keywords : [],
+          show_month_calendar: value.show_month_calendar !== false,
+          vacation_keywords: Array.isArray(value.vacation_keywords) ? value.vacation_keywords : [],
+          tts: { tts_entity: ttsCfg.tts_entity || "", media_player: ttsCfg.media_player || "" },
+          general: Array.isArray(value.general) ? value.general : [],
         };
       }
     } catch (err) {
@@ -399,6 +434,126 @@ class FamilyPlannerPanel extends HTMLElement {
     return card;
   }
 
+  _countdownCard(item, idx) {
+    const card = document.createElement("div");
+    card.className = "fpp-item-card";
+
+    const entityField = document.createElement("div");
+    entityField.className = "fpp-field";
+    entityField.innerHTML = `<div class="fpp-label">Entitet (state = datum)</div>`;
+    entityField.appendChild(
+      this._mkEntityPicker(item.entity, (val) => {
+        const items = [...this._data.countdowns.items];
+        items[idx] = { ...items[idx], entity: val };
+        this._data.countdowns = { ...this._data.countdowns, items };
+        this._markDirty();
+      })
+    );
+
+    const nameInput = this._textInput(item.name, "Namn", (val) => {
+      const items = [...this._data.countdowns.items];
+      items[idx] = { ...items[idx], name: val };
+      this._data.countdowns = { ...this._data.countdowns, items };
+      this._markDirty();
+    }, "140px");
+
+    const pinnedLabel = document.createElement("label");
+    pinnedLabel.style.display = "flex";
+    pinnedLabel.style.alignItems = "center";
+    pinnedLabel.style.gap = "4px";
+    pinnedLabel.style.fontSize = "0.85em";
+    const pinnedCheckbox = document.createElement("input");
+    pinnedCheckbox.type = "checkbox";
+    pinnedCheckbox.checked = !!item.pinned;
+    pinnedCheckbox.addEventListener("change", (ev) => {
+      const items = [...this._data.countdowns.items];
+      items[idx] = { ...items[idx], pinned: ev.target.checked };
+      this._data.countdowns = { ...this._data.countdowns, items };
+      this._markDirty();
+    });
+    pinnedLabel.appendChild(pinnedCheckbox);
+    pinnedLabel.appendChild(document.createTextNode("Visa alltid"));
+
+    const removeBtn = this._removeBtn(() => {
+      const items = this._data.countdowns.items.filter((_, i) => i !== idx);
+      this._data.countdowns = { ...this._data.countdowns, items };
+      this._markDirty();
+      this._render();
+    });
+
+    card.appendChild(this._row([entityField, nameInput, pinnedLabel, removeBtn]));
+    return card;
+  }
+
+  _vacationCard(kw, idx) {
+    const card = document.createElement("div");
+    card.className = "fpp-item-card";
+
+    const matchInput = this._textInput(kw.match, "Ord att matcha, t.ex. lov", (val) => {
+      const vacation_keywords = [...this._data.vacation_keywords];
+      vacation_keywords[idx] = { ...vacation_keywords[idx], match: val };
+      this._data.vacation_keywords = vacation_keywords;
+      this._markDirty();
+    });
+
+    const colorInput = this._colorInput(kw.color, "#c8f7c5", (val) => {
+      const vacation_keywords = [...this._data.vacation_keywords];
+      vacation_keywords[idx] = { ...vacation_keywords[idx], color: val };
+      this._data.vacation_keywords = vacation_keywords;
+      this._markDirty();
+    });
+
+    const removeBtn = this._removeBtn(() => {
+      this._data.vacation_keywords = this._data.vacation_keywords.filter((_, i) => i !== idx);
+      this._markDirty();
+      this._render();
+    });
+
+    card.appendChild(this._row([matchInput, colorInput, removeBtn]));
+    return card;
+  }
+
+  _generalCard(g, idx) {
+    const card = document.createElement("div");
+    card.className = "fpp-item-card";
+
+    const entityField = document.createElement("div");
+    entityField.className = "fpp-field";
+    entityField.innerHTML = `<div class="fpp-label">Entitet (binary_sensor)</div>`;
+    entityField.appendChild(
+      this._mkEntityPicker(g.entity, (val) => {
+        const general = [...this._data.general];
+        general[idx] = { ...general[idx], entity: val };
+        this._data.general = general;
+        this._markDirty();
+      }, null, ["binary_sensor"])
+    );
+
+    const nameInput = this._textInput(g.name, "Namn", (val) => {
+      const general = [...this._data.general];
+      general[idx] = { ...general[idx], name: val };
+      this._data.general = general;
+      this._markDirty();
+    }, "120px");
+
+    const iconInput = this._textInput(g.icon, "mdi:bell", (val) => {
+      const general = [...this._data.general];
+      general[idx] = { ...general[idx], icon: val };
+      this._data.general = general;
+      this._markDirty();
+    }, "120px");
+
+    const removeBtn = this._removeBtn(() => {
+      this._data.general = this._data.general.filter((_, i) => i !== idx);
+      this._markDirty();
+      this._render();
+    });
+
+    card.appendChild(this._row([entityField]));
+    card.appendChild(this._row([nameInput, iconInput, removeBtn]));
+    return card;
+  }
+
   _render() {
     const narrowDisplay = this._narrow ? "" : "none";
     this.innerHTML = `
@@ -436,11 +591,14 @@ class FamilyPlannerPanel extends HTMLElement {
         .fpp-section-title { font-weight: 500; margin-bottom: 12px; font-size: 1.1em; }
         .fpp-section-hint { color: var(--secondary-text-color); font-size: 0.85em; margin-bottom: 12px; }
         .fpp-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-        .fpp-row input[type="text"] {
+        .fpp-row input[type="text"], .fpp-row input[type="number"] {
           padding: 8px; border: 1px solid var(--divider-color); border-radius: 6px;
           background: var(--card-background-color); color: var(--primary-text-color); font-size: 0.9em;
         }
         .fpp-row input[type="color"] { width: 36px; height: 36px; padding: 2px; }
+        .fpp-checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+        .fpp-subtitle { font-weight: 500; margin: 16px 0 10px; font-size: 0.95em; }
+        .fpp-subtitle:first-child { margin-top: 0; }
         .fpp-item-card {
           border: 1px solid var(--divider-color); border-radius: 10px;
           padding: 14px; margin-bottom: 14px; background: var(--card-background-color);
@@ -468,10 +626,28 @@ class FamilyPlannerPanel extends HTMLElement {
         </div>
         <div class="fpp-content">
           <div class="fpp-section">
+            <div class="fpp-section-title">Allmänt</div>
+            <div class="fpp-section-hint">
+              Gäller alla Family Planner-kort på den här HA-instansen.
+            </div>
+            <div class="fpp-row" id="fpp-title-row"></div>
+            <div class="fpp-checkbox-row" id="fpp-collapsed-row"></div>
+          </div>
+          <div class="fpp-section">
+            <div class="fpp-section-title">Nedräkningar</div>
+            <div class="fpp-row" id="fpp-maxshown-row"></div>
+            <div id="fpp-countdown-list"></div>
+          </div>
+          <div class="fpp-section">
+            <div class="fpp-section-title">Väder</div>
+            <div class="fpp-row" id="fpp-weather-entity-row"></div>
+            <div class="fpp-checkbox-row" id="fpp-weather-week-row"></div>
+          </div>
+          <div class="fpp-section">
             <div class="fpp-section-title">Personer</div>
             <div class="fpp-section-hint">
               Dessa personer, kalendrar och sensorer hämtas automatiskt av alla
-              Family Planner-kort vars YAML inte själv anger "persons".
+              Family Planner-kort.
             </div>
             <div id="fpp-person-list"></div>
           </div>
@@ -489,6 +665,23 @@ class FamilyPlannerPanel extends HTMLElement {
             </div>
             <div id="fpp-keyword-list"></div>
           </div>
+          <div class="fpp-section">
+            <div class="fpp-section-title">Månadskalender</div>
+            <div class="fpp-checkbox-row" id="fpp-monthcal-row"></div>
+          </div>
+          <div class="fpp-section">
+            <div class="fpp-section-title">Semestermarkering (färgar hela dagar i månadskalendern)</div>
+            <div id="fpp-vacation-list"></div>
+          </div>
+          <div class="fpp-section">
+            <div class="fpp-section-title">Röstuppläsning (TTS)</div>
+            <div class="fpp-row" id="fpp-tts-entity-row"></div>
+            <div class="fpp-row" id="fpp-tts-player-row"></div>
+          </div>
+          <div class="fpp-section">
+            <div class="fpp-section-title">Allmänna sensorer (visas som rund ikon när "on")</div>
+            <div id="fpp-general-list"></div>
+          </div>
         </div>
       </div>
     `;
@@ -496,6 +689,86 @@ class FamilyPlannerPanel extends HTMLElement {
     this.querySelector("#fpp-menu-btn").addEventListener("click", () => this._toggleMenu());
     this.querySelector("#fpp-save-btn").addEventListener("click", () => this._save());
     this._updateStatus();
+
+    // Allmänt
+    const titleField = document.createElement("div");
+    titleField.className = "fpp-field";
+    titleField.innerHTML = `<div class="fpp-label">Titel</div>`;
+    titleField.appendChild(
+      this._textInput(this._data.title, "Familjeplanering", (val) => {
+        this._data.title = val;
+        this._markDirty();
+      })
+    );
+    this.querySelector("#fpp-title-row").appendChild(titleField);
+
+    const collapsedRow = this.querySelector("#fpp-collapsed-row");
+    const collapsedCheckbox = document.createElement("input");
+    collapsedCheckbox.type = "checkbox";
+    collapsedCheckbox.checked = this._data.start_collapsed;
+    collapsedCheckbox.addEventListener("change", (ev) => {
+      this._data.start_collapsed = ev.target.checked;
+      this._markDirty();
+    });
+    const collapsedLabel = document.createElement("label");
+    collapsedLabel.textContent = 'Starta "Idag"-sektionen ihopfälld';
+    collapsedRow.appendChild(collapsedCheckbox);
+    collapsedRow.appendChild(collapsedLabel);
+
+    // Nedräkningar
+    const maxField = document.createElement("div");
+    maxField.className = "fpp-field";
+    maxField.innerHTML = `<div class="fpp-label">Hur många nedräkningar som visas normalt</div>`;
+    const maxInput = document.createElement("input");
+    maxInput.type = "number";
+    maxInput.min = "0";
+    maxInput.value = this._data.countdowns.max_shown;
+    maxInput.style.width = "80px";
+    maxInput.addEventListener("change", (ev) => {
+      const n = parseInt(ev.target.value, 10);
+      this._data.countdowns = { ...this._data.countdowns, max_shown: isNaN(n) ? 5 : n };
+      this._markDirty();
+    });
+    maxField.appendChild(maxInput);
+    this.querySelector("#fpp-maxshown-row").appendChild(maxField);
+
+    const cdListEl = this.querySelector("#fpp-countdown-list");
+    this._data.countdowns.items.forEach((item, idx) => cdListEl.appendChild(this._countdownCard(item, idx)));
+    cdListEl.appendChild(
+      this._addBtn("+ Lägg till nedräkning", () => {
+        this._data.countdowns = {
+          ...this._data.countdowns,
+          items: [...this._data.countdowns.items, { entity: "", name: "", pinned: false }],
+        };
+        this._markDirty();
+        this._render();
+      })
+    );
+
+    // Väder
+    const weatherEntityField = document.createElement("div");
+    weatherEntityField.className = "fpp-field";
+    weatherEntityField.innerHTML = `<div class="fpp-label">Väder-entitet (weather.*)</div>`;
+    weatherEntityField.appendChild(
+      this._mkEntityPicker(this._data.weather.entity, (val) => {
+        this._data.weather = { ...this._data.weather, entity: val };
+        this._markDirty();
+      }, null, ["weather"])
+    );
+    this.querySelector("#fpp-weather-entity-row").appendChild(weatherEntityField);
+
+    const weatherWeekRowEl = this.querySelector("#fpp-weather-week-row");
+    const weatherWeekCheckbox = document.createElement("input");
+    weatherWeekCheckbox.type = "checkbox";
+    weatherWeekCheckbox.checked = this._data.weather.show_week;
+    weatherWeekCheckbox.addEventListener("change", (ev) => {
+      this._data.weather = { ...this._data.weather, show_week: ev.target.checked };
+      this._markDirty();
+    });
+    const weatherWeekLabel = document.createElement("label");
+    weatherWeekLabel.textContent = "Visa väderprognos för veckans dagar";
+    weatherWeekRowEl.appendChild(weatherWeekCheckbox);
+    weatherWeekRowEl.appendChild(weatherWeekLabel);
 
     const personListEl = this.querySelector("#fpp-person-list");
     if (this._data.persons.length === 0) {
@@ -542,6 +815,65 @@ class FamilyPlannerPanel extends HTMLElement {
           this._data.icon_keywords = list;
         }
       )
+    );
+
+    // Månadskalender - visa/dölj
+    const monthCalRow = this.querySelector("#fpp-monthcal-row");
+    const monthCalCheckbox = document.createElement("input");
+    monthCalCheckbox.type = "checkbox";
+    monthCalCheckbox.checked = this._data.show_month_calendar;
+    monthCalCheckbox.addEventListener("change", (ev) => {
+      this._data.show_month_calendar = ev.target.checked;
+      this._markDirty();
+    });
+    const monthCalLabel = document.createElement("label");
+    monthCalLabel.textContent = "Visa månadskalender under veckoschemat";
+    monthCalRow.appendChild(monthCalCheckbox);
+    monthCalRow.appendChild(monthCalLabel);
+
+    // Semestermarkering
+    const vacListEl = this.querySelector("#fpp-vacation-list");
+    this._data.vacation_keywords.forEach((kw, idx) => vacListEl.appendChild(this._vacationCard(kw, idx)));
+    vacListEl.appendChild(
+      this._addBtn("+ Lägg till semestermarkering", () => {
+        this._data.vacation_keywords = [...this._data.vacation_keywords, { match: "", color: "#c8f7c5" }];
+        this._markDirty();
+        this._render();
+      })
+    );
+
+    // TTS
+    const ttsEntityField = document.createElement("div");
+    ttsEntityField.className = "fpp-field";
+    ttsEntityField.innerHTML = `<div class="fpp-label">TTS-entitet (tts.*)</div>`;
+    ttsEntityField.appendChild(
+      this._mkEntityPicker(this._data.tts.tts_entity, (val) => {
+        this._data.tts = { ...this._data.tts, tts_entity: val };
+        this._markDirty();
+      }, null, ["tts"])
+    );
+    this.querySelector("#fpp-tts-entity-row").appendChild(ttsEntityField);
+
+    const ttsPlayerField = document.createElement("div");
+    ttsPlayerField.className = "fpp-field";
+    ttsPlayerField.innerHTML = `<div class="fpp-label">Högtalare (media_player.*)</div>`;
+    ttsPlayerField.appendChild(
+      this._mkEntityPicker(this._data.tts.media_player, (val) => {
+        this._data.tts = { ...this._data.tts, media_player: val };
+        this._markDirty();
+      }, null, ["media_player"])
+    );
+    this.querySelector("#fpp-tts-player-row").appendChild(ttsPlayerField);
+
+    // Allmänna sensorer
+    const generalListEl = this.querySelector("#fpp-general-list");
+    this._data.general.forEach((g, idx) => generalListEl.appendChild(this._generalCard(g, idx)));
+    generalListEl.appendChild(
+      this._addBtn("+ Lägg till allmän sensor", () => {
+        this._data.general = [...this._data.general, { entity: "", name: "", icon: "" }];
+        this._markDirty();
+        this._render();
+      })
     );
   }
 }

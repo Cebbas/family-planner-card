@@ -3,6 +3,13 @@
  * -----------------------------------------------------------------------
  * En egen Lovelace-card för Home Assistant.
  *
+ * Kortet har ingen egen konfiguration - allt (personer, kalendrar,
+ * nedräkningar, väder, ikon-nyckelord, TTS, allmänna sensorer, m.m.)
+ * sätts upp en gång i sidopanelen "Familjeplanering" och delas av alla
+ * Family Planner-kort på den här HA-instansen. Lägg bara till kortet:
+ *
+ * type: custom:family-planner-card
+ *
  * Övre delen ("Idag"):
  *   - En rad per person. Varje person kan ha flera `entities` (text-
  *     sensorer) - varje sensor med ett icke-tomt state får sin egen rad
@@ -13,44 +20,11 @@
  *
  * Vecka + månad:
  *   - Samma `calendar_entity` per person driver både veckoschemat och
- *     månadskalendern - ingen separat "week_entity" längre.
- *   - Kalendrar som inte hör till en specifik person läggs under det
- *     toppnivå-fältet `calendars` och samlas i en delad rad
+ *     månadskalendern - ingen separat "week_entity".
+ *   - Kalendrar som inte hör till en specifik person läggs under
+ *     "Delade kalendrar" i panelen och samlas i en delad rad
  *     (`calendars_label`) i veckoschemat, plus egna filter/prickar i
  *     månadskalendern.
- *
- * -----------------------------------------------------------------------
- * Exempel-konfiguration:
- *
- * type: custom:family-planner-card
- * title: Familjeplanering
- * persons:
- *   - name: Anna                     # valfri om person_entity är satt
- *     person_entity: person.anna     # valfri - hämtar namn+profilbild från HA
- *     entities:                      # valfri lista, flera "idag"-sensorer
- *       - sensor.anna_skola
- *       - sensor.anna_fritids
- *     calendar_entity: calendar.anna # driver både vecka och månad
- *     icon: mdi:account
- *     color: "#e17055"               # valfri, färg på avatar/prickar
- *   - name: Erik
- *     entities:
- *       - sensor.erik_idag
- *     calendar_entity: calendar.erik
- *     icon: mdi:account
- *     color: "#0984e3"
- * calendars:                          # kalendrar utan koppling till en person
- *   - entity: calendar.familj
- *     name: Familj
- *     color: "#95a5a6"
- * calendars_label: Övrigt             # radnamn för calendars i veckoschemat
- * general:
- *   - entity: binary_sensor.tvattmaskin
- *     name: Tvätt
- *     icon: mdi:washing-machine
- *   - entity: binary_sensor.sopor_imorgon
- *     name: Sopor
- *     icon: mdi:trash-can
  *
  * -----------------------------------------------------------------------
  * Installation: den här filen serveras och laddas automatiskt av den
@@ -58,8 +32,9 @@
  * (custom_components/family_planner) - installera den (HACS-kategorin
  * "Integration", eller manuellt) och lägg till den under Inställningar
  * → Enheter & tjänster → Lägg till integration → "Family Planner".
- * Ingen manuell Lovelace-resurs behövs. Lägg sedan till kortet i ditt
- * dashboard med YAML enligt exemplet ovan.
+ * Ingen manuell Lovelace-resurs behövs. Öppna sedan sidopanelen
+ * "Familjeplanering" i sidomenyn för att sätta upp familjen, och lägg
+ * till kortet på valfritt dashboard.
  */
 
 const DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -160,6 +135,14 @@ function renderIconBadge(icon) {
   return `<span class="fpc-kw-emoji">${icon}</span>`;
 }
 
+function fpcEsc(str) {
+  return String(str == null ? "" : str)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 class FamilyPlannerCard extends HTMLElement {
   constructor() {
     super();
@@ -206,54 +189,35 @@ class FamilyPlannerCard extends HTMLElement {
       }));
   }
 
+  // Startvärden innan den delade konfigurationen har hunnit laddas -
+  // håller _render()/_update() säkra att köra på en tom uppsättning.
+  _defaultConfig() {
+    return {
+      title: "Familjeplanering",
+      persons: [],
+      calendars: [],
+      calendars_label: "Övrigt",
+      general: [],
+      start_collapsed: false,
+      countdowns: { max_shown: 5, items: [] },
+      weather: null,
+      icon_keywords: [],
+      show_month_calendar: true,
+      vacation_keywords: [],
+      tts: null,
+    };
+  }
+
   setConfig(config) {
     if (!config) {
       throw new Error("Ingen konfiguration angiven");
     }
-    // Om 'persons' helt utelämnas hämtas personer/kalendrar/ikon-nyckelord
-    // istället från sidopanelen "Familjeplanering" (delad konfiguration).
-    this._usesSharedConfig = !Array.isArray(config.persons);
-    let persons = [];
-    let calendars = [];
-    let calendars_label = "Övrigt";
-    let icon_keywords = Array.isArray(config.icon_keywords) ? config.icon_keywords : [];
-
-    if (!this._usesSharedConfig) {
-      if (config.persons.length === 0) {
-        throw new Error(
-          "Du måste ange minst en person under 'persons', eller ta bort 'persons' helt för att hämta personer från sidopanelen 'Familjeplanering'"
-        );
-      }
-      persons = this._normalizePersons(config.persons);
-      calendars = this._normalizeCalendars(config.calendars);
-      calendars_label = config.calendars_label || "Övrigt";
-    }
-
-    const countdownCfg = config.countdowns || {};
-    const weatherCfg = config.weather || {};
-    this._config = {
-      title: config.title || "Familjeplanering",
-      persons,
-      calendars,
-      calendars_label,
-      general: Array.isArray(config.general) ? config.general : [],
-      start_collapsed: !!config.start_collapsed,
-      countdowns: {
-        max_shown: Number.isFinite(countdownCfg.max_shown) ? countdownCfg.max_shown : 5,
-        items: Array.isArray(countdownCfg.items) ? countdownCfg.items : [],
-      },
-      weather: weatherCfg.entity
-        ? { entity: weatherCfg.entity, show_week: !!weatherCfg.show_week }
-        : null,
-      icon_keywords,
-      show_month_calendar: config.show_month_calendar !== false,
-      vacation_keywords: Array.isArray(config.vacation_keywords) ? config.vacation_keywords : [],
-      tts:
-        config.tts && config.tts.tts_entity && config.tts.media_player
-          ? { tts_entity: config.tts.tts_entity, media_player: config.tts.media_player }
-          : null,
-    };
-    this._collapsed = this._config.start_collapsed;
+    // Kortet har ingen egen konfiguration - allt hämtas från sidopanelen
+    // "Familjeplanering" (se _maybeLoadSharedConfig) så att alla kort på
+    // instansen alltid visar samma familj.
+    this._config = this._defaultConfig();
+    this._collapsed = false;
+    this._collapsedInitialized = false;
     this._sharedConfigCache = null;
     this._built = false;
     this._render();
@@ -272,14 +236,14 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeLoadSharedConfig();
   }
 
-  // Hämtar personer/kalendrar/ikon-nyckelord från Family Planner-
-  // integrationens delade lagring när 'persons' inte anges lokalt.
-  // Kräver att custom_components/family_planner är installerad och
-  // tillagd (Inställningar → Enheter & tjänster → Family Planner) -
-  // annars är family_planner/get_config ett okänt kommando och vi
-  // hamnar tyst i catch-blocket nedan (visas som "inga personer").
+  // Hämtar hela konfigurationen (personer/kalendrar/nedräkningar/väder/
+  // m.m.) från Family Planner-integrationens delade lagring. Kräver att
+  // custom_components/family_planner är installerad och tillagd
+  // (Inställningar → Enheter & tjänster → Family Planner) - annars är
+  // family_planner/get_config ett okänt kommando och vi hamnar tyst i
+  // catch-blocket nedan (visas som tomt kort).
   async _maybeLoadSharedConfig() {
-    if (!this._usesSharedConfig || !this._hass) return;
+    if (!this._hass) return;
     if (this._sharedConfigLoading) return;
     const cache = this._sharedConfigCache;
     const fresh = cache && Date.now() - cache.fetchedAt < 5 * 60 * 1000;
@@ -289,13 +253,40 @@ class FamilyPlannerCard extends HTMLElement {
     try {
       const result = await this._hass.callWS({ type: "family_planner/get_config" });
       const data = (result && result.value) || {};
-      this._config.persons = this._normalizePersons(data.persons);
-      this._config.calendars = this._normalizeCalendars(data.calendars);
-      this._config.calendars_label = data.calendars_label || "Övrigt";
-      this._config.icon_keywords = Array.isArray(data.icon_keywords) ? data.icon_keywords : [];
+      const countdownCfg = data.countdowns || {};
+      const weatherCfg = data.weather || {};
+      this._config = {
+        title: data.title || "Familjeplanering",
+        persons: this._normalizePersons(data.persons),
+        calendars: this._normalizeCalendars(data.calendars),
+        calendars_label: data.calendars_label || "Övrigt",
+        general: Array.isArray(data.general) ? data.general : [],
+        start_collapsed: !!data.start_collapsed,
+        countdowns: {
+          max_shown: Number.isFinite(countdownCfg.max_shown) ? countdownCfg.max_shown : 5,
+          items: Array.isArray(countdownCfg.items) ? countdownCfg.items : [],
+        },
+        weather: weatherCfg.entity
+          ? { entity: weatherCfg.entity, show_week: !!weatherCfg.show_week }
+          : null,
+        icon_keywords: Array.isArray(data.icon_keywords) ? data.icon_keywords : [],
+        show_month_calendar: data.show_month_calendar !== false,
+        vacation_keywords: Array.isArray(data.vacation_keywords) ? data.vacation_keywords : [],
+        tts:
+          data.tts && data.tts.tts_entity && data.tts.media_player
+            ? { tts_entity: data.tts.tts_entity, media_player: data.tts.media_player }
+            : null,
+      };
+      // Bara vid allra första laddningen - annars skulle en cache-
+      // uppdatering var 5:e minut nollställa ett kort användaren redan
+      // manuellt fällt ut/ihop.
+      if (!this._collapsedInitialized) {
+        this._collapsed = this._config.start_collapsed;
+        this._collapsedInitialized = true;
+      }
       this._sharedConfigCache = { fetchedAt: Date.now() };
     } catch (err) {
-      // Sidopanelen kanske inte finns/aldrig sparats än - visas som "inga personer".
+      // Integrationen kanske inte är installerad/tillagd än - visas som tomt kort.
     } finally {
       // Alltid nollställd, annars fastnar hämtningen i "laddar" för alltid
       // om något oväntat kastar fel ovan.
@@ -304,6 +295,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._update();
     this._maybeFetchMonthEvents();
     this._maybeFetchWeekEvents();
+    this._maybeFetchForecast();
   }
 
   // Alla kalenderkällor - personer med calendar_entity + fristående
@@ -971,9 +963,7 @@ class FamilyPlannerCard extends HTMLElement {
     // Personrader - idag
     const personsEl = this.shadowRoot.querySelector("#fpc-persons");
     if (personsEl && cfg.persons.length === 0) {
-      personsEl.innerHTML = this._usesSharedConfig
-        ? `<div class="fpc-general-empty">Inga personer konfigurerade ännu. Öppna sidopanelen "Familjeplanering" för att lägga till familjemedlemmar.</div>`
-        : `<div class="fpc-general-empty">Inga personer konfigurerade.</div>`;
+      personsEl.innerHTML = `<div class="fpc-general-empty">Inga personer konfigurerade ännu. Öppna sidopanelen "Familjeplanering" för att lägga till familjemedlemmar.</div>`;
     } else if (personsEl) {
       personsEl.innerHTML = cfg.persons
         .map((p) => {
@@ -1409,809 +1399,14 @@ class FamilyPlannerCard extends HTMLElement {
     }
   }
 
-  static getConfigElement() {
-    return document.createElement("family-planner-card-editor");
-  }
-
   static getStubConfig() {
-    return {
-      type: "custom:family-planner-card",
-      title: "Familjeplanering",
-      countdowns: { max_shown: 5, items: [] },
-      weather: null,
-      icon_keywords: [],
-      show_month_calendar: true,
-      vacation_keywords: [],
-      tts: null,
-      persons: [{ name: "Person 1", entities: [] }],
-      calendars: [],
-      calendars_label: "Övrigt",
-      general: [],
-    };
+    // Kortet har ingen egen konfiguration - allt sätts upp i sidopanelen
+    // "Familjeplanering" och delas av alla kort, se _maybeLoadSharedConfig().
+    return { type: "custom:family-planner-card" };
   }
 }
 
 customElements.define("family-planner-card", FamilyPlannerCard);
-
-/* =========================================================================
- * Visuell editor
- * ========================================================================= */
-
-function fpcEsc(str) {
-  return String(str == null ? "" : str)
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}
-
-class FamilyPlannerCardEditor extends HTMLElement {
-  constructor() {
-    super();
-    this.attachShadow({ mode: "open" });
-  }
-
-  setConfig(config) {
-    this._config = {
-      type: config.type,
-      title: config.title || "",
-      start_collapsed: !!config.start_collapsed,
-      countdowns: {
-        max_shown: Number.isFinite(config.countdowns && config.countdowns.max_shown)
-          ? config.countdowns.max_shown
-          : 5,
-        items: (config.countdowns && config.countdowns.items) || [],
-      },
-      weather: config.weather ? { entity: config.weather.entity || "", show_week: !!config.weather.show_week } : { entity: "", show_week: false },
-      icon_keywords: config.icon_keywords || [],
-      show_month_calendar: config.show_month_calendar !== false,
-      vacation_keywords: config.vacation_keywords || [],
-      tts: {
-        tts_entity: (config.tts && config.tts.tts_entity) || "",
-        media_player: (config.tts && config.tts.media_player) || "",
-      },
-      persons: (config.persons || []).map((p) => ({
-        name: p.name || "",
-        person_entity: p.person_entity || "",
-        entities: Array.isArray(p.entities) ? p.entities : [],
-        calendar_entity: p.calendar_entity || "",
-        icon: p.icon || "",
-        color: p.color || "",
-        icon_keywords: Array.isArray(p.icon_keywords) ? p.icon_keywords : [],
-      })),
-      calendars: (config.calendars || []).map((c) => ({
-        entity: c.entity || "",
-        name: c.name || "",
-        color: c.color || "",
-      })),
-      calendars_label: config.calendars_label || "Övrigt",
-      general: config.general || [],
-    };
-    this._render();
-  }
-
-  set hass(hass) {
-    this._hass = hass;
-    // Uppdatera hass på alla entity-pickers utan att bygga om hela UI:t
-    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((el) => {
-      el.hass = hass;
-    });
-  }
-
-  _fireChanged() {
-    this.dispatchEvent(
-      new CustomEvent("config-changed", {
-        detail: { config: this._config },
-        bubbles: true,
-        composed: true,
-      })
-    );
-  }
-
-  _mkEntityPicker(value, onChange, placeholder, includeDomains) {
-    if (customElements.get("ha-entity-picker")) {
-      const picker = document.createElement("ha-entity-picker");
-      picker.hass = this._hass;
-      picker.value = value || "";
-      picker.allowCustomEntity = true;
-      if (includeDomains && includeDomains.length) picker.includeDomains = includeDomains;
-      picker.style.flex = "1";
-      picker.addEventListener("value-changed", (ev) => {
-        ev.stopPropagation();
-        onChange(ev.detail.value || "");
-      });
-      return picker;
-    }
-    // Fallback om ha-entity-picker inte är laddad: vanligt textfält
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = value || "";
-    input.placeholder = placeholder || "entity_id";
-    input.style.flex = "1";
-    input.addEventListener("change", (ev) => onChange(ev.target.value));
-    return input;
-  }
-
-  _row(children) {
-    const row = document.createElement("div");
-    row.className = "fpce-row";
-    children.forEach((c) => row.appendChild(c));
-    return row;
-  }
-
-  // Nästlad, ombyggbar lista med "idag"-sensorer för en person - varje
-  // sensor med icke-tomt state blir en egen rad i Idag-vyn.
-  _personEntitiesList(p, idx) {
-    const wrap = document.createElement("div");
-    const label = document.createElement("div");
-    label.className = "fpce-label";
-    label.textContent = "Idag-sensorer (en rad per sensor i Idag-vyn)";
-    wrap.appendChild(label);
-
-    const entities = Array.isArray(p.entities) ? p.entities : [];
-    entities.forEach((eid, eIdx) => {
-      const picker = this._mkEntityPicker(eid, (val) => {
-        const persons = [...this._config.persons];
-        const list = [...(persons[idx].entities || [])];
-        list[eIdx] = val;
-        persons[idx] = { ...persons[idx], entities: list };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-      });
-      const removeBtn = this._removeBtn(() => {
-        const persons = [...this._config.persons];
-        const list = (persons[idx].entities || []).filter((_, i) => i !== eIdx);
-        persons[idx] = { ...persons[idx], entities: list };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-        this._render();
-      });
-      wrap.appendChild(this._row([picker, removeBtn]));
-    });
-
-    wrap.appendChild(
-      this._addBtn("+ Lägg till sensor", () => {
-        const persons = [...this._config.persons];
-        const list = [...(persons[idx].entities || []), ""];
-        persons[idx] = { ...persons[idx], entities: list };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-        this._render();
-      })
-    );
-    return wrap;
-  }
-
-  // Person-specifika ikon-nyckelord - matchar innan de globala
-  // (fpce-sektionen "Ikon-nyckelord"), så samma ord kan ge olika
-  // bild/ikon för olika personer, t.ex. Sebastians vs Elis fotbollslag.
-  _personIconKeywordsList(p, idx) {
-    const wrap = document.createElement("div");
-    const label = document.createElement("div");
-    label.className = "fpce-label";
-    label.textContent = "Person-specifika ikon-nyckelord (matchar före de globala)";
-    wrap.appendChild(label);
-
-    const keywords = Array.isArray(p.icon_keywords) ? p.icon_keywords : [];
-    keywords.forEach((kw, kIdx) => {
-      const matchInput = this._textInput(kw.match, "Ord, t.ex. fotboll", (val) => {
-        const persons = [...this._config.persons];
-        const list = [...(persons[idx].icon_keywords || [])];
-        list[kIdx] = { ...list[kIdx], match: val };
-        persons[idx] = { ...persons[idx], icon_keywords: list };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-      });
-      const iconInput = this._textInput(kw.icon, "⚽, mdi:soccer, eller bild-URL", (val) => {
-        const persons = [...this._config.persons];
-        const list = [...(persons[idx].icon_keywords || [])];
-        list[kIdx] = { ...list[kIdx], icon: val };
-        persons[idx] = { ...persons[idx], icon_keywords: list };
-        this._config = { ...this._config, persons };
-        preview.innerHTML = renderIconBadge(val);
-        this._fireChanged();
-      }, "140px");
-      const preview = document.createElement("div");
-      preview.innerHTML = renderIconBadge(kw.icon);
-      const removeBtn = this._removeBtn(() => {
-        const persons = [...this._config.persons];
-        const list = (persons[idx].icon_keywords || []).filter((_, i) => i !== kIdx);
-        persons[idx] = { ...persons[idx], icon_keywords: list };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-        this._render();
-      });
-      wrap.appendChild(this._row([matchInput, iconInput, preview, removeBtn]));
-    });
-
-    wrap.appendChild(
-      this._addBtn("+ Lägg till person-nyckelord", () => {
-        const persons = [...this._config.persons];
-        const list = [...(persons[idx].icon_keywords || []), { match: "", icon: "" }];
-        persons[idx] = { ...persons[idx], icon_keywords: list };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-        this._render();
-      })
-    );
-    return wrap;
-  }
-
-  _textInput(value, placeholder, onChange, widthCss) {
-    const input = document.createElement("input");
-    input.type = "text";
-    input.value = value || "";
-    input.placeholder = placeholder || "";
-    if (widthCss) input.style.width = widthCss;
-    else input.style.flex = "1";
-    input.addEventListener("change", (ev) => onChange(ev.target.value));
-    return input;
-  }
-
-  _removeBtn(onClick) {
-    const btn = document.createElement("button");
-    btn.className = "fpce-remove";
-    btn.type = "button";
-    btn.title = "Ta bort";
-    btn.textContent = "✕";
-    btn.addEventListener("click", onClick);
-    return btn;
-  }
-
-  _addBtn(label, onClick) {
-    const btn = document.createElement("button");
-    btn.className = "fpce-add";
-    btn.type = "button";
-    btn.textContent = label;
-    btn.addEventListener("click", onClick);
-    return btn;
-  }
-
-  _render() {
-    const cfg = this._config;
-
-    this.shadowRoot.innerHTML = `
-      <style>
-        .fpce { padding: 8px 0; }
-        .fpce-section {
-          margin-bottom: 20px; padding-bottom: 16px;
-          border-bottom: 1px solid var(--divider-color);
-        }
-        .fpce-section:last-child { border-bottom: none; }
-        .fpce-section-title {
-          font-weight: 500; margin-bottom: 10px; font-size: 1.05em;
-        }
-        .fpce-row {
-          display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-        }
-        .fpce-row input[type="text"], .fpce-row input[type="number"] {
-          padding: 8px; border: 1px solid var(--divider-color);
-          border-radius: 6px; background: var(--card-background-color);
-          color: var(--primary-text-color); font-size: 0.9em;
-        }
-        .fpce-row input[type="color"] { width: 36px; height: 36px; padding: 2px; }
-        .fpce-checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-        .fpce-item-card {
-          border: 1px solid var(--divider-color); border-radius: 8px;
-          padding: 10px; margin-bottom: 10px;
-        }
-        .fpce-remove {
-          border: none; background: none; color: var(--error-color, #db4437);
-          cursor: pointer; font-size: 1em; padding: 4px 8px;
-        }
-        .fpce-add {
-          border: 1px dashed var(--primary-color); background: none;
-          color: var(--primary-color); border-radius: 6px; padding: 8px 12px;
-          cursor: pointer; font-size: 0.9em; width: 100%;
-        }
-        .fpce-label { font-size: 0.8em; color: var(--secondary-text-color); margin-bottom: 2px; }
-        .fpce-field { display: flex; flex-direction: column; flex: 1; }
-      </style>
-      <div class="fpce">
-        <div class="fpce-section">
-          <div class="fpce-section-title">Allmänt</div>
-          <div class="fpce-row" id="fpce-title-row"></div>
-          <div class="fpce-checkbox-row" id="fpce-collapsed-row"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Nedräkningar</div>
-          <div class="fpce-row" id="fpce-maxshown-row"></div>
-          <div id="fpce-countdown-list"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Väder</div>
-          <div class="fpce-row" id="fpce-weather-entity-row"></div>
-          <div class="fpce-checkbox-row" id="fpce-weather-week-row"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Ikon-nyckelord (matchar ord i händelsetext mot en ikon)</div>
-          <div id="fpce-keyword-list"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Månadskalender</div>
-          <div class="fpce-checkbox-row" id="fpce-monthcal-row"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Semestermarkering (färgar hela dagar i månadskalendern)</div>
-          <div id="fpce-vacation-list"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Röstuppläsning (TTS)</div>
-          <div class="fpce-row" id="fpce-tts-entity-row"></div>
-          <div class="fpce-row" id="fpce-tts-player-row"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Personer</div>
-          <div id="fpce-person-list"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Delade kalendrar (hör inte till en specifik person)</div>
-          <div class="fpce-row" id="fpce-calendars-label-row"></div>
-          <div id="fpce-calendar-list"></div>
-        </div>
-        <div class="fpce-section">
-          <div class="fpce-section-title">Allmänna sensorer (visas som rund ikon när "on")</div>
-          <div id="fpce-general-list"></div>
-        </div>
-      </div>
-    `;
-
-    // Titel
-    const titleField = document.createElement("div");
-    titleField.className = "fpce-field";
-    titleField.innerHTML = `<div class="fpce-label">Titel</div>`;
-    const titleInput = this._textInput(cfg.title, "Familjeplanering", (val) => {
-      this._config = { ...this._config, title: val };
-      this._fireChanged();
-    });
-    titleField.appendChild(titleInput);
-    this.shadowRoot.querySelector("#fpce-title-row").appendChild(titleField);
-
-    // Start collapsed
-    const collapsedRow = this.shadowRoot.querySelector("#fpce-collapsed-row");
-    const collapsedCheckbox = document.createElement("input");
-    collapsedCheckbox.type = "checkbox";
-    collapsedCheckbox.checked = cfg.start_collapsed;
-    collapsedCheckbox.addEventListener("change", (ev) => {
-      this._config = { ...this._config, start_collapsed: ev.target.checked };
-      this._fireChanged();
-    });
-    const collapsedLabel = document.createElement("label");
-    collapsedLabel.textContent = 'Starta "Idag"-sektionen ihopfälld';
-    collapsedRow.appendChild(collapsedCheckbox);
-    collapsedRow.appendChild(collapsedLabel);
-
-    // Max shown
-    const maxField = document.createElement("div");
-    maxField.className = "fpce-field";
-    maxField.innerHTML = `<div class="fpce-label">Hur många nedräkningar som visas normalt</div>`;
-    const maxInput = document.createElement("input");
-    maxInput.type = "number";
-    maxInput.min = "0";
-    maxInput.value = cfg.countdowns.max_shown;
-    maxInput.style.width = "80px";
-    maxInput.addEventListener("change", (ev) => {
-      const n = parseInt(ev.target.value, 10);
-      this._config = {
-        ...this._config,
-        countdowns: { ...this._config.countdowns, max_shown: isNaN(n) ? 5 : n },
-      };
-      this._fireChanged();
-    });
-    maxField.appendChild(maxInput);
-    this.shadowRoot.querySelector("#fpce-maxshown-row").appendChild(maxField);
-
-    // Ikon-nyckelord
-    const kwListEl = this.shadowRoot.querySelector("#fpce-keyword-list");
-    cfg.icon_keywords.forEach((kw, idx) => {
-      const card = document.createElement("div");
-      card.className = "fpce-item-card";
-
-      const matchInput = this._textInput(kw.match, "Ord att matcha, t.ex. fotboll", (val) => {
-        const icon_keywords = [...this._config.icon_keywords];
-        icon_keywords[idx] = { ...icon_keywords[idx], match: val };
-        this._config = { ...this._config, icon_keywords };
-        this._fireChanged();
-      });
-
-      const iconInput = this._textInput(kw.icon, "⚽, mdi:soccer, eller bild-URL", (val) => {
-        const icon_keywords = [...this._config.icon_keywords];
-        icon_keywords[idx] = { ...icon_keywords[idx], icon: val };
-        this._config = { ...this._config, icon_keywords };
-        preview.innerHTML = renderIconBadge(val);
-        this._fireChanged();
-      }, "140px");
-
-      const preview = document.createElement("div");
-      preview.innerHTML = renderIconBadge(kw.icon);
-
-      const removeBtn = this._removeBtn(() => {
-        const icon_keywords = this._config.icon_keywords.filter((_, i) => i !== idx);
-        this._config = { ...this._config, icon_keywords };
-        this._fireChanged();
-        this._render();
-      });
-
-      card.appendChild(this._row([matchInput, iconInput, preview, removeBtn]));
-      kwListEl.appendChild(card);
-    });
-    kwListEl.appendChild(
-      this._addBtn("+ Lägg till nyckelord", () => {
-        const icon_keywords = [...this._config.icon_keywords, { match: "", icon: "" }];
-        this._config = { ...this._config, icon_keywords };
-        this._fireChanged();
-        this._render();
-      })
-    );
-
-    // Väder
-    const weatherEntityField = document.createElement("div");
-    weatherEntityField.className = "fpce-field";
-    weatherEntityField.innerHTML = `<div class="fpce-label">Väder-entitet (weather.*)</div>`;
-    weatherEntityField.appendChild(
-      this._mkEntityPicker(cfg.weather.entity, (val) => {
-        this._config = { ...this._config, weather: { ...this._config.weather, entity: val } };
-        this._fireChanged();
-      }, null, ["weather"])
-    );
-    this.shadowRoot.querySelector("#fpce-weather-entity-row").appendChild(weatherEntityField);
-
-    const weatherWeekRowEl = this.shadowRoot.querySelector("#fpce-weather-week-row");
-    const weatherWeekCheckbox = document.createElement("input");
-    weatherWeekCheckbox.type = "checkbox";
-    weatherWeekCheckbox.checked = cfg.weather.show_week;
-    weatherWeekCheckbox.addEventListener("change", (ev) => {
-      this._config = { ...this._config, weather: { ...this._config.weather, show_week: ev.target.checked } };
-      this._fireChanged();
-    });
-    const weatherWeekLabel = document.createElement("label");
-    weatherWeekLabel.textContent = "Visa väderprognos för veckans dagar";
-    weatherWeekRowEl.appendChild(weatherWeekCheckbox);
-    weatherWeekRowEl.appendChild(weatherWeekLabel);
-
-    // Countdown items
-    const cdListEl = this.shadowRoot.querySelector("#fpce-countdown-list");    cfg.countdowns.items.forEach((item, idx) => {
-      const card = document.createElement("div");
-      card.className = "fpce-item-card";
-
-      const entityField = document.createElement("div");
-      entityField.className = "fpce-field";
-      entityField.innerHTML = `<div class="fpce-label">Entitet (state = datum)</div>`;
-      const entityPicker = this._mkEntityPicker(item.entity, (val) => {
-        const items = [...this._config.countdowns.items];
-        items[idx] = { ...items[idx], entity: val };
-        this._config = { ...this._config, countdowns: { ...this._config.countdowns, items } };
-        this._fireChanged();
-      });
-      entityField.appendChild(entityPicker);
-
-      const nameInput = this._textInput(item.name, "Namn", (val) => {
-        const items = [...this._config.countdowns.items];
-        items[idx] = { ...items[idx], name: val };
-        this._config = { ...this._config, countdowns: { ...this._config.countdowns, items } };
-        this._fireChanged();
-      }, "140px");
-
-      const pinnedLabel = document.createElement("label");
-      pinnedLabel.style.display = "flex";
-      pinnedLabel.style.alignItems = "center";
-      pinnedLabel.style.gap = "4px";
-      pinnedLabel.style.fontSize = "0.85em";
-      const pinnedCheckbox = document.createElement("input");
-      pinnedCheckbox.type = "checkbox";
-      pinnedCheckbox.checked = !!item.pinned;
-      pinnedCheckbox.addEventListener("change", (ev) => {
-        const items = [...this._config.countdowns.items];
-        items[idx] = { ...items[idx], pinned: ev.target.checked };
-        this._config = { ...this._config, countdowns: { ...this._config.countdowns, items } };
-        this._fireChanged();
-      });
-      pinnedLabel.appendChild(pinnedCheckbox);
-      pinnedLabel.appendChild(document.createTextNode("Visa alltid"));
-
-      const removeBtn = this._removeBtn(() => {
-        const items = this._config.countdowns.items.filter((_, i) => i !== idx);
-        this._config = { ...this._config, countdowns: { ...this._config.countdowns, items } };
-        this._fireChanged();
-        this._render();
-      });
-
-      card.appendChild(this._row([entityField, nameInput, pinnedLabel, removeBtn]));
-      cdListEl.appendChild(card);
-    });
-    cdListEl.appendChild(
-      this._addBtn("+ Lägg till nedräkning", () => {
-        const items = [...this._config.countdowns.items, { entity: "", name: "", pinned: false }];
-        this._config = { ...this._config, countdowns: { ...this._config.countdowns, items } };
-        this._fireChanged();
-        this._render();
-      })
-    );
-
-    // Månadskalender - visa/dölj
-    const monthCalRow = this.shadowRoot.querySelector("#fpce-monthcal-row");
-    const monthCalCheckbox = document.createElement("input");
-    monthCalCheckbox.type = "checkbox";
-    monthCalCheckbox.checked = cfg.show_month_calendar;
-    monthCalCheckbox.addEventListener("change", (ev) => {
-      this._config = { ...this._config, show_month_calendar: ev.target.checked };
-      this._fireChanged();
-    });
-    const monthCalLabel = document.createElement("label");
-    monthCalLabel.textContent = "Visa månadskalender under veckoschemat";
-    monthCalRow.appendChild(monthCalCheckbox);
-    monthCalRow.appendChild(monthCalLabel);
-
-    // Semestermarkering
-    const vacListEl = this.shadowRoot.querySelector("#fpce-vacation-list");
-    cfg.vacation_keywords.forEach((kw, idx) => {
-      const card = document.createElement("div");
-      card.className = "fpce-item-card";
-
-      const matchInput = this._textInput(kw.match, "Ord att matcha, t.ex. lov", (val) => {
-        const vacation_keywords = [...this._config.vacation_keywords];
-        vacation_keywords[idx] = { ...vacation_keywords[idx], match: val };
-        this._config = { ...this._config, vacation_keywords };
-        this._fireChanged();
-      });
-
-      const colorInput = document.createElement("input");
-      colorInput.type = "color";
-      colorInput.value = /^#[0-9a-fA-F]{6}$/.test(kw.color) ? kw.color : "#c8f7c5";
-      colorInput.addEventListener("change", (ev) => {
-        const vacation_keywords = [...this._config.vacation_keywords];
-        vacation_keywords[idx] = { ...vacation_keywords[idx], color: ev.target.value };
-        this._config = { ...this._config, vacation_keywords };
-        this._fireChanged();
-      });
-
-      const removeBtn = this._removeBtn(() => {
-        const vacation_keywords = this._config.vacation_keywords.filter((_, i) => i !== idx);
-        this._config = { ...this._config, vacation_keywords };
-        this._fireChanged();
-        this._render();
-      });
-
-      card.appendChild(this._row([matchInput, colorInput, removeBtn]));
-      vacListEl.appendChild(card);
-    });
-    vacListEl.appendChild(
-      this._addBtn("+ Lägg till semestermarkering", () => {
-        const vacation_keywords = [...this._config.vacation_keywords, { match: "", color: "#c8f7c5" }];
-        this._config = { ...this._config, vacation_keywords };
-        this._fireChanged();
-        this._render();
-      })
-    );
-
-    // TTS
-    const ttsEntityField = document.createElement("div");
-    ttsEntityField.className = "fpce-field";
-    ttsEntityField.innerHTML = `<div class="fpce-label">TTS-entitet (tts.*)</div>`;
-    ttsEntityField.appendChild(
-      this._mkEntityPicker(cfg.tts.tts_entity, (val) => {
-        this._config = { ...this._config, tts: { ...this._config.tts, tts_entity: val } };
-        this._fireChanged();
-      }, null, ["tts"])
-    );
-    this.shadowRoot.querySelector("#fpce-tts-entity-row").appendChild(ttsEntityField);
-
-    const ttsPlayerField = document.createElement("div");
-    ttsPlayerField.className = "fpce-field";
-    ttsPlayerField.innerHTML = `<div class="fpce-label">Högtalare (media_player.*)</div>`;
-    ttsPlayerField.appendChild(
-      this._mkEntityPicker(cfg.tts.media_player, (val) => {
-        this._config = { ...this._config, tts: { ...this._config.tts, media_player: val } };
-        this._fireChanged();
-      }, null, ["media_player"])
-    );
-    this.shadowRoot.querySelector("#fpce-tts-player-row").appendChild(ttsPlayerField);
-
-    // Persons
-    const personListEl = this.shadowRoot.querySelector("#fpce-person-list");
-    cfg.persons.forEach((p, idx) => {
-      const card = document.createElement("div");
-      card.className = "fpce-item-card";
-
-      const nameField = document.createElement("div");
-      nameField.className = "fpce-field";
-      nameField.innerHTML = `<div class="fpce-label">Namn</div>`;
-      nameField.appendChild(
-        this._textInput(p.name, "Namn", (val) => {
-          const persons = [...this._config.persons];
-          persons[idx] = { ...persons[idx], name: val };
-          this._config = { ...this._config, persons };
-          this._fireChanged();
-        })
-      );
-
-      const personEntityField = document.createElement("div");
-      personEntityField.className = "fpce-field";
-      personEntityField.innerHTML = `<div class="fpce-label">Koppla till HA-person (valfri - hämtar namn + profilbild)</div>`;
-      personEntityField.appendChild(
-        this._mkEntityPicker(p.person_entity, (val) => {
-          const persons = [...this._config.persons];
-          persons[idx] = { ...persons[idx], person_entity: val };
-          this._config = { ...this._config, persons };
-          this._fireChanged();
-        }, "person.namn", ["person"])
-      );
-
-      const calField = document.createElement("div");
-      calField.className = "fpce-field";
-      calField.innerHTML = `<div class="fpce-label">Kalender (används för både veckoschema och månadsvy)</div>`;
-      calField.appendChild(
-        this._mkEntityPicker(p.calendar_entity, (val) => {
-          const persons = [...this._config.persons];
-          persons[idx] = { ...persons[idx], calendar_entity: val };
-          this._config = { ...this._config, persons };
-          this._fireChanged();
-        }, null, ["calendar"])
-      );
-
-      const removeBtn = this._removeBtn(() => {
-        const persons = this._config.persons.filter((_, i) => i !== idx);
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-        this._render();
-      });
-
-      card.appendChild(this._row([nameField, removeBtn]));
-      card.appendChild(this._row([personEntityField]));
-      card.appendChild(this._personEntitiesList(p, idx));
-      card.appendChild(this._row([calField]));
-      card.appendChild(this._personIconKeywordsList(p, idx));
-
-      const iconInput = this._textInput(p.icon, "mdi:account", (val) => {
-        const persons = [...this._config.persons];
-        persons[idx] = { ...persons[idx], icon: val };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-      });
-      const colorInput = document.createElement("input");
-      colorInput.type = "color";
-      colorInput.value = /^#[0-9a-fA-F]{6}$/.test(p.color) ? p.color : "#03a9f4";
-      colorInput.addEventListener("change", (ev) => {
-        const persons = [...this._config.persons];
-        persons[idx] = { ...persons[idx], color: ev.target.value };
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-      });
-      card.appendChild(this._row([iconInput, colorInput]));
-
-      personListEl.appendChild(card);
-    });
-    personListEl.appendChild(
-      this._addBtn("+ Lägg till person", () => {
-        const persons = [...this._config.persons, { name: "", entities: [] }];
-        this._config = { ...this._config, persons };
-        this._fireChanged();
-        this._render();
-      })
-    );
-
-    // Delade kalendrar (hör inte till en person)
-    const calLabelField = document.createElement("div");
-    calLabelField.className = "fpce-field";
-    calLabelField.innerHTML = `<div class="fpce-label">Radnamn i veckoschemat</div>`;
-    calLabelField.appendChild(
-      this._textInput(cfg.calendars_label, "Övrigt", (val) => {
-        this._config = { ...this._config, calendars_label: val };
-        this._fireChanged();
-      })
-    );
-    this.shadowRoot.querySelector("#fpce-calendars-label-row").appendChild(calLabelField);
-
-    const calListEl = this.shadowRoot.querySelector("#fpce-calendar-list");
-    cfg.calendars.forEach((c, idx) => {
-      const card = document.createElement("div");
-      card.className = "fpce-item-card";
-
-      const entityField = document.createElement("div");
-      entityField.className = "fpce-field";
-      entityField.innerHTML = `<div class="fpce-label">Kalender-entitet</div>`;
-      entityField.appendChild(
-        this._mkEntityPicker(c.entity, (val) => {
-          const calendars = [...this._config.calendars];
-          calendars[idx] = { ...calendars[idx], entity: val };
-          this._config = { ...this._config, calendars };
-          this._fireChanged();
-        }, "calendar.familj", ["calendar"])
-      );
-
-      const nameInput = this._textInput(c.name, "Namn", (val) => {
-        const calendars = [...this._config.calendars];
-        calendars[idx] = { ...calendars[idx], name: val };
-        this._config = { ...this._config, calendars };
-        this._fireChanged();
-      }, "140px");
-
-      const colorInput = document.createElement("input");
-      colorInput.type = "color";
-      colorInput.value = /^#[0-9a-fA-F]{6}$/.test(c.color) ? c.color : "#95a5a6";
-      colorInput.addEventListener("change", (ev) => {
-        const calendars = [...this._config.calendars];
-        calendars[idx] = { ...calendars[idx], color: ev.target.value };
-        this._config = { ...this._config, calendars };
-        this._fireChanged();
-      });
-
-      const removeBtn = this._removeBtn(() => {
-        const calendars = this._config.calendars.filter((_, i) => i !== idx);
-        this._config = { ...this._config, calendars };
-        this._fireChanged();
-        this._render();
-      });
-
-      card.appendChild(this._row([entityField]));
-      card.appendChild(this._row([nameInput, colorInput, removeBtn]));
-      calListEl.appendChild(card);
-    });
-    calListEl.appendChild(
-      this._addBtn("+ Lägg till kalender", () => {
-        const calendars = [...this._config.calendars, { entity: "", name: "", color: "#95a5a6" }];
-        this._config = { ...this._config, calendars };
-        this._fireChanged();
-        this._render();
-      })
-    );
-
-    // General sensors
-    const generalListEl = this.shadowRoot.querySelector("#fpce-general-list");
-    cfg.general.forEach((g, idx) => {
-      const card = document.createElement("div");
-      card.className = "fpce-item-card";
-
-      const entityField = document.createElement("div");
-      entityField.className = "fpce-field";
-      entityField.innerHTML = `<div class="fpce-label">Entitet (binary_sensor)</div>`;
-      entityField.appendChild(
-        this._mkEntityPicker(g.entity, (val) => {
-          const general = [...this._config.general];
-          general[idx] = { ...general[idx], entity: val };
-          this._config = { ...this._config, general };
-          this._fireChanged();
-        }, null, ["binary_sensor"])
-      );
-
-      const nameInput = this._textInput(g.name, "Namn", (val) => {
-        const general = [...this._config.general];
-        general[idx] = { ...general[idx], name: val };
-        this._config = { ...this._config, general };
-        this._fireChanged();
-      }, "120px");
-
-      const iconInput = this._textInput(g.icon, "mdi:bell", (val) => {
-        const general = [...this._config.general];
-        general[idx] = { ...general[idx], icon: val };
-        this._config = { ...this._config, general };
-        this._fireChanged();
-      }, "120px");
-
-      const removeBtn = this._removeBtn(() => {
-        const general = this._config.general.filter((_, i) => i !== idx);
-        this._config = { ...this._config, general };
-        this._fireChanged();
-        this._render();
-      });
-
-      card.appendChild(this._row([entityField]));
-      card.appendChild(this._row([nameInput, iconInput, removeBtn]));
-
-      generalListEl.appendChild(card);
-    });
-    generalListEl.appendChild(
-      this._addBtn("+ Lägg till allmän sensor", () => {
-        const general = [...this._config.general, { entity: "", name: "", icon: "" }];
-        this._config = { ...this._config, general };
-        this._fireChanged();
-        this._render();
-      })
-    );
-  }
-}
-
-customElements.define("family-planner-card-editor", FamilyPlannerCardEditor);
 
 // Registrera i kortväljaren i UI-editorn
 window.customCards = window.customCards || [];

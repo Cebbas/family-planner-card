@@ -163,20 +163,6 @@ function eventCoversNow(ev) {
   return now >= new Date(startRaw) && now < new Date(endRaw);
 }
 
-// Bakgrund för en månadsvy-dag som täcks av 1+ "borta"-kalendrar - en
-// färg fyller hela cellen, flera delar den i lika stora horisontella
-// fält (övre/undre halva vardera vid två färger).
-function stripeBackground(colors) {
-  if (!colors || colors.length === 0) return null;
-  if (colors.length === 1) return colors[0];
-  const step = 100 / colors.length;
-  const stops = [];
-  colors.forEach((c, i) => {
-    stops.push(`${c} ${(i * step).toFixed(2)}%`, `${c} ${((i + 1) * step).toFixed(2)}%`);
-  });
-  return `linear-gradient(180deg, ${stops.join(", ")})`;
-}
-
 function isImagePath(str) {
   if (!str) return false;
   if (/^https?:\/\//i.test(str)) return true;
@@ -773,6 +759,10 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-month-daynum { font-size: 0.82em; }
         .fpc-month-dots { display: flex; gap: 2px; margin-top: 2px; flex-wrap: wrap; justify-content: center; }
         .fpc-month-dot { width: 5px; height: 5px; border-radius: 50%; }
+        .fpc-month-away-bar {
+          align-self: end; justify-self: stretch; height: 5px; border-radius: 3px;
+          margin-left: 1px; margin-right: 1px; pointer-events: none;
+        }
         .fpc-month-daydetail { margin-top: 12px; }
         .fpc-month-daydetail-title { font-weight: 500; margin-bottom: 6px; font-size: 0.92em; }
         .fpc-month-event {
@@ -1410,16 +1400,7 @@ class FamilyPlannerCard extends HTMLElement {
       const allEvents = this._eventsForDate(dIso);
       const visibleEvents = allEvents.filter((ev) => !this._hiddenSources.has(ev.sourceKey));
       const vacationColor = this._vacationColorForDate(dIso, allEvents);
-      // "Borta hos andra föräldern"-bakgrund går före semestermarkering -
-      // en färg per aktiv borta-kalender den dagen, delat i lika stora
-      // horisontella fält om flera barn är borta samtidigt (olika kalendrar).
-      // Bygger på allEvents (inte visibleEvents) - precis som semester-
-      // markeringen ska filter-chipsen bara dölja prickar/lista, inte ändra
-      // vem som faktiskt är borta den dagen.
-      const awayColors = [
-        ...new Set(allEvents.filter((ev) => ev.sourceIsAway).map((ev) => ev.sourceColor)),
-      ];
-      const dayBackground = stripeBackground(awayColors) || vacationColor;
+      const dayBackground = vacationColor;
       const dots = visibleEvents
         .slice(0, 6)
         .map((ev) => `<div class="fpc-month-dot" style="background:${ev.sourceColor}"></div>`)
@@ -1442,7 +1423,9 @@ class FamilyPlannerCard extends HTMLElement {
       `;
     }
 
-    gridEl.innerHTML = weekdayHeaders + cells;
+    const awayBars = this._awayBarsHtml(gridStart, sources);
+
+    gridEl.innerHTML = weekdayHeaders + cells + awayBars;
     gridEl.querySelectorAll(".fpc-month-cell").forEach((cell) => {
       const dIso = cell.getAttribute("data-date");
       cell.addEventListener("pointerdown", (ev) => {
@@ -1464,6 +1447,51 @@ class FamilyPlannerCard extends HTMLElement {
     });
 
     this._renderMonthDayDetail();
+  }
+
+  // Bygger de sammanhängande färgade "borta hos andra föräldern"-raderna
+  // som spänner över de dagar en borta-kalenders händelse täcker, à la
+  // iOS Kalender - istället för att färga hela dagcellens bakgrund.
+  // Placeras som egna rutnätsobjekt i samma CSS-grid som dagcellerna
+  // (gridEl har display:grid, 7 kolumner), med explicit grid-row/-column
+  // per veckorad så de bryggar över mellanrummet mellan celler korrekt.
+  // Flera samtidigt aktiva borta-kalendrar staplas som egna rader (en
+  // stackIdx per kalender bland de synliga borta-källorna).
+  _awayBarsHtml(gridStart, sources) {
+    const cache = this._monthEventsCache;
+    if (!cache) return "";
+    const awaySources = sources.filter((s) => s.isAway && !this._hiddenSources.has(s.key));
+    if (awaySources.length === 0) return "";
+
+    let html = "";
+    for (let week = 0; week < 6; week++) {
+      const weekStart = new Date(gridStart);
+      weekStart.setDate(weekStart.getDate() + week * 7);
+      const weekDates = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(weekStart);
+        d.setDate(d.getDate() + i);
+        return isoDate(d);
+      });
+
+      awaySources.forEach((src, stackIdx) => {
+        const events = cache.data[src.calendar_entity] || [];
+        events.forEach((ev) => {
+          const range = eventDateRange(ev);
+          if (!range) return;
+          const clipStart = range.start < weekDates[0] ? weekDates[0] : range.start;
+          const clipEnd = range.end > weekDates[6] ? weekDates[6] : range.end;
+          if (clipStart > clipEnd) return;
+          const startCol = weekDates.indexOf(clipStart);
+          const endCol = weekDates.indexOf(clipEnd);
+          if (startCol === -1 || endCol === -1) return;
+          const marginBottom = 3 + stackIdx * 8;
+          html += `
+            <div class="fpc-month-away-bar" style="grid-row:${week + 2}; grid-column:${startCol + 1} / ${endCol + 2}; background:${src.color}; margin-bottom:${marginBottom}px;"></div>
+          `;
+        });
+      });
+    }
+    return html;
   }
 
   _renderMonthDayDetail() {

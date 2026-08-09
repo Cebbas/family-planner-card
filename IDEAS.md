@@ -94,6 +94,15 @@ Kvar att göra om man vill gå vidare: matcha på hela ord istället för
 substräng (undviker t.ex. att "bad" matchar inuti "badminton"), och
 möjlighet att visa *bara* badgen utan text som ett kompakt läge.
 
+## Förhandsgranskning av utfallet i konfigurationsstegen
+I panelens olika inställningssteg (t.ex. när man väljer en sensor för en
+person) — visa vad valet faktiskt resulterar i just nu, baserat på
+entitetens nuvarande state/attribut, inte bara vilken entitet som är vald.
+Bör även tydligt visa när sensorn *inte* ger ett användbart resultat (tomt
+state, oväntat format, eller entiteten saknas/är otillgänglig), så
+felkonfiguration upptäcks direkt i panelen istället för att man måste öppna
+kortet efteråt och gissa varför en rad inte ser ut som väntat.
+
 ## Dagens sista/nästa transport
 En liten rad med nästa avgång, t.ex. via en Trafikläget/Resrobot-
 integration, för den som pendlar.
@@ -163,6 +172,15 @@ Komplement till "notis om tom dag": skicka en riktig push-notis (inte
 bara UI-badge) via en `notify.*`-tjänst om en persons vecka är helt tom
 flera dagar i rad, så man inte missar att sensorn slutat uppdateras även
 när man inte har dashboarden öppen.
+
+## Dynamisk text i nedräkningsnamnet
+Just nu är `name` på en nedräkning en helt statisk text. Låt den innehålla
+platshållare som fylls i från sensorns attribut vid rendering, t.ex. skriva
+"Farfar fyller {age} år" i konfigurationen och få "Farfar fyller 70 år"
+visat, där `{age}` hämtas från ett valt attribut på nedräkningens `entity`
+(vanligt på t.ex. födelsedagsintegrationer som räknar ut ålder). Skulle
+kunna kombineras med idén om förhandsgranskning i panelen så man ser det
+ifyllda resultatet direkt när man skriver mallen.
 
 ## Övrigt (lägre prioritet)
 - Håll koll på om ha-icon saknas/ogiltig icon-sträng ger tyst fel istället

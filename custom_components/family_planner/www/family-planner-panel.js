@@ -37,6 +37,13 @@ function isImagePath(str) {
   return /\.(png|jpe?g|gif|webp|svg)$/i.test(str);
 }
 
+// Nyckel som binder en person till en "borta hos andra föräldern"-kalender
+// (away_calendars[].persons) - namnet om satt, annars person_entity-id:t.
+// Måste hållas i synk med samma funktion i family-planner-card.js.
+function personMatchKey(p) {
+  return (p && (p.name || p.person_entity)) || "";
+}
+
 function renderIconBadge(icon) {
   if (!icon) return "";
   if (icon.startsWith("mdi:")) {
@@ -95,6 +102,7 @@ class FamilyPlannerPanel extends HTMLElement {
       persons: [],
       calendars: [],
       calendars_label: "Övrigt",
+      away_calendars: [],
       icon_keywords: [],
       show_month_calendar: true,
       vacation_keywords: [],
@@ -122,6 +130,7 @@ class FamilyPlannerPanel extends HTMLElement {
           persons: Array.isArray(value.persons) ? value.persons : [],
           calendars: Array.isArray(value.calendars) ? value.calendars : [],
           calendars_label: value.calendars_label || "Övrigt",
+          away_calendars: Array.isArray(value.away_calendars) ? value.away_calendars : [],
           icon_keywords: Array.isArray(value.icon_keywords) ? value.icon_keywords : [],
           show_month_calendar: value.show_month_calendar !== false,
           vacation_keywords: Array.isArray(value.vacation_keywords) ? value.vacation_keywords : [],
@@ -434,13 +443,90 @@ class FamilyPlannerPanel extends HTMLElement {
     return card;
   }
 
+  // En kalender som visar när 1+ barn är hos sin andra förälder - matchar
+  // mot cfg.persons via personMatchKey(), inte index, så den håller sig
+  // rätt även om personlistan ordnas om. Används av kortet för att gråa
+  // ut barnet i Idag-vyn och färglägga dagar i månadsvyn.
+  _awayCalendarCard(a, idx) {
+    const card = document.createElement("div");
+    card.className = "fpp-item-card";
+
+    const entityField = document.createElement("div");
+    entityField.className = "fpp-field";
+    entityField.innerHTML = `<div class="fpp-label">Kalender-entitet</div>`;
+    entityField.appendChild(
+      this._mkEntityPicker(a.entity, (val) => {
+        this._data.away_calendars[idx] = { ...this._data.away_calendars[idx], entity: val };
+        this._markDirty();
+      }, "calendar.hos_pappa", ["calendar"])
+    );
+
+    const nameInput = this._textInput(a.name, "Text, t.ex. Hos pappa", (val) => {
+      this._data.away_calendars[idx] = { ...this._data.away_calendars[idx], name: val };
+      this._markDirty();
+    }, "160px");
+
+    const colorInput = this._colorInput(a.color, "#95a5a6", (val) => {
+      this._data.away_calendars[idx] = { ...this._data.away_calendars[idx], color: val };
+      this._markDirty();
+    });
+
+    const removeBtn = this._removeBtn(() => {
+      this._data.away_calendars = this._data.away_calendars.filter((_, i) => i !== idx);
+      this._markDirty();
+      this._render();
+    });
+
+    const personsLabel = document.createElement("div");
+    personsLabel.className = "fpp-label";
+    personsLabel.textContent = "Vilka barn/personer gäller kalendern för";
+    const personsWrap = document.createElement("div");
+    personsWrap.className = "fpp-away-persons";
+    const selected = Array.isArray(a.persons) ? a.persons : [];
+    if (this._data.persons.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "fpp-label";
+      empty.textContent = "Lägg till en person ovan först.";
+      personsWrap.appendChild(empty);
+    }
+    this._data.persons.forEach((p) => {
+      const key = personMatchKey(p);
+      const label = document.createElement("label");
+      label.className = "fpp-away-person-chip";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = !!key && selected.includes(key);
+      checkbox.disabled = !key;
+      checkbox.addEventListener("change", (ev) => {
+        // Läser this._data.away_calendars[idx].persons på nytt istället för
+        // att stänga över "selected" - annars tappas den första kryssningen
+        // om man kryssar två barn i samma kort utan omritning emellan.
+        const current = Array.isArray(this._data.away_calendars[idx].persons)
+          ? this._data.away_calendars[idx].persons
+          : [];
+        const list = ev.target.checked ? [...current, key] : current.filter((k) => k !== key);
+        this._data.away_calendars[idx] = { ...this._data.away_calendars[idx], persons: list };
+        this._markDirty();
+      });
+      label.appendChild(checkbox);
+      label.appendChild(document.createTextNode(key || "(sätt namn på personen först)"));
+      personsWrap.appendChild(label);
+    });
+
+    card.appendChild(this._row([entityField]));
+    card.appendChild(this._row([nameInput, colorInput, removeBtn]));
+    card.appendChild(personsLabel);
+    card.appendChild(personsWrap);
+    return card;
+  }
+
   _countdownCard(item, idx) {
     const card = document.createElement("div");
     card.className = "fpp-item-card";
 
     const entityField = document.createElement("div");
     entityField.className = "fpp-field";
-    entityField.innerHTML = `<div class="fpp-label">Entitet (state = datum)</div>`;
+    entityField.innerHTML = `<div class="fpp-label">Entitet (state = datum, om inget attribut anges nedan)</div>`;
     entityField.appendChild(
       this._mkEntityPicker(item.entity, (val) => {
         const items = [...this._data.countdowns.items];
@@ -456,6 +542,18 @@ class FamilyPlannerPanel extends HTMLElement {
       this._data.countdowns = { ...this._data.countdowns, items };
       this._markDirty();
     }, "140px");
+
+    const dateAttrField = document.createElement("div");
+    dateAttrField.className = "fpp-field";
+    dateAttrField.innerHTML = `<div class="fpp-label">Attribut med datum (valfritt - t.ex. next_date. Lämna tomt för att använda state direkt)</div>`;
+    dateAttrField.appendChild(
+      this._textInput(item.date_attribute, "t.ex. next_date", (val) => {
+        const items = [...this._data.countdowns.items];
+        items[idx] = { ...items[idx], date_attribute: val };
+        this._data.countdowns = { ...this._data.countdowns, items };
+        this._markDirty();
+      })
+    );
 
     const pinnedLabel = document.createElement("label");
     pinnedLabel.style.display = "flex";
@@ -482,6 +580,7 @@ class FamilyPlannerPanel extends HTMLElement {
     });
 
     card.appendChild(this._row([entityField, nameInput, pinnedLabel, removeBtn]));
+    card.appendChild(this._row([dateAttrField]));
     return card;
   }
 
@@ -616,6 +715,11 @@ class FamilyPlannerPanel extends HTMLElement {
         .fpp-kw-icon { --mdc-icon-size: 18px; }
         .fpp-kw-image { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; }
         .fpp-empty { color: var(--secondary-text-color); font-style: italic; margin-bottom: 12px; }
+        .fpp-away-persons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+        .fpp-away-person-chip {
+          display: flex; align-items: center; gap: 6px; font-size: 0.85em;
+          border: 1px solid var(--divider-color); border-radius: 16px; padding: 5px 10px;
+        }
       </style>
       <div class="fpp-root">
         <div class="fpp-header">
@@ -655,6 +759,16 @@ class FamilyPlannerPanel extends HTMLElement {
             <div class="fpp-section-title">Delade kalendrar (hör inte till en specifik person)</div>
             <div class="fpp-row" id="fpp-calendars-label-row"></div>
             <div id="fpp-calendar-list"></div>
+          </div>
+          <div class="fpp-section">
+            <div class="fpp-section-title">Borta hos andra föräldern</div>
+            <div class="fpp-section-hint">
+              Kalendrar som visar när ett barn är hos sin andra förälder. Barnet
+              tonas ner i Idag-vyn medan de är borta, och dagarna färgas i
+              månadskalendern (delat i fält om flera barn är borta med olika
+              kalendrar samma dag).
+            </div>
+            <div id="fpp-away-list"></div>
           </div>
           <div class="fpp-section">
             <div class="fpp-section-title">Globala ikon-nyckelord</div>
@@ -802,6 +916,19 @@ class FamilyPlannerPanel extends HTMLElement {
     calListEl.appendChild(
       this._addBtn("+ Lägg till kalender", () => {
         this._data.calendars = [...this._data.calendars, { entity: "", name: "", color: "#95a5a6" }];
+        this._markDirty();
+        this._render();
+      })
+    );
+
+    const awayListEl = this.querySelector("#fpp-away-list");
+    this._data.away_calendars.forEach((a, idx) => awayListEl.appendChild(this._awayCalendarCard(a, idx)));
+    awayListEl.appendChild(
+      this._addBtn("+ Lägg till borta-kalender", () => {
+        this._data.away_calendars = [
+          ...this._data.away_calendars,
+          { entity: "", name: "", color: "#95a5a6", persons: [] },
+        ];
         this._markDirty();
         this._render();
       })

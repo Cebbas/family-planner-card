@@ -88,6 +88,13 @@ function weekdayIndex(date) {
 // Matchar text (case-insensitive, substräng) mot en ordnad lista av
 // {match, icon}. Första träffen vinner. icon kan vara en emoji eller en
 // mdi:-ikon.
+// Nyckel som binder en person till en "borta hos andra föräldern"-kalender
+// (away_calendars[].persons) - namnet om satt, annars person_entity-id:t.
+// Samma logik används i sidopanelen när kryssrutorna för barn sparas.
+function personMatchKey(p) {
+  return (p && (p.name || p.person_entity)) || "";
+}
+
 function matchIcon(text, keywords) {
   if (!text || !Array.isArray(keywords)) return null;
   const lower = String(text).toLowerCase();
@@ -115,6 +122,59 @@ function startOfCalendarGrid(year, month) {
   const first = new Date(year, month, 1);
   const dow = weekdayIndex(first);
   return new Date(year, month, 1 - dow);
+}
+
+// Datumintervall [start, end] (båda inklusive, "YYYY-MM-DD") som en
+// kalenderhändelse täcker. Heldagshändelsers slutdatum är exklusivt
+// enligt iCal-spec (en helg fre-sön har end.date = måndagen), så det
+// dras av en dag för att bli inklusivt och jämförbart mot dateIso.
+function eventDateRange(ev) {
+  const startRaw = ev.start && (ev.start.dateTime || ev.start.date);
+  if (!startRaw) return null;
+  const endRaw = (ev.end && (ev.end.dateTime || ev.end.date)) || startRaw;
+  const isAllDayEnd = !!(ev.end && ev.end.date && !ev.end.dateTime);
+  const start = isoDate(new Date(startRaw));
+  const endDate = new Date(endRaw);
+  if (isAllDayEnd) endDate.setDate(endDate.getDate() - 1);
+  const end = isoDate(endDate);
+  return { start, end: end < start ? start : end };
+}
+
+// Täcker händelsen ett givet datum - används för både flerdagars
+// semester-/borta-markeringar i månadsvyn och för att visa flerdagars-
+// händelser (t.ex. en hel "borta"-helg) varje dag de pågår i veckoschemat,
+// inte bara på startdagen.
+function eventCoversDate(ev, dateIso) {
+  const range = eventDateRange(ev);
+  return !!range && dateIso >= range.start && dateIso <= range.end;
+}
+
+// Pågår händelsen just nu (används för att gråa ut ett barn som är borta
+// i Idag-vyn) - till skillnad från eventCoversDate jobbar den här med
+// faktiska tidpunkter, inte hela dagar, så en tidsatt hämtning kl 18:00
+// slutar räknas som "borta" direkt efteråt.
+function eventCoversNow(ev) {
+  const startRaw = ev.start && (ev.start.dateTime || ev.start.date);
+  if (!startRaw) return false;
+  const isAllDay = !!(ev.start && ev.start.date && !ev.start.dateTime);
+  if (isAllDay) return eventCoversDate(ev, isoDate(new Date()));
+  const endRaw = (ev.end && (ev.end.dateTime || ev.end.date)) || startRaw;
+  const now = new Date();
+  return now >= new Date(startRaw) && now < new Date(endRaw);
+}
+
+// Bakgrund för en månadsvy-dag som täcks av 1+ "borta"-kalendrar - en
+// färg fyller hela cellen, flera delar den i lika stora horisontella
+// fält (övre/undre halva vardera vid två färger).
+function stripeBackground(colors) {
+  if (!colors || colors.length === 0) return null;
+  if (colors.length === 1) return colors[0];
+  const step = 100 / colors.length;
+  const stops = [];
+  colors.forEach((c, i) => {
+    stops.push(`${c} ${(i * step).toFixed(2)}%`, `${c} ${((i + 1) * step).toFixed(2)}%`);
+  });
+  return `linear-gradient(180deg, ${stops.join(", ")})`;
 }
 
 function isImagePath(str) {
@@ -189,6 +249,17 @@ class FamilyPlannerCard extends HTMLElement {
       }));
   }
 
+  _normalizeAwayCalendars(list) {
+    return (Array.isArray(list) ? list : [])
+      .filter((a) => a && a.entity)
+      .map((a) => ({
+        entity: a.entity,
+        name: a.name || a.entity,
+        color: a.color || "#95a5a6",
+        persons: Array.isArray(a.persons) ? a.persons : [],
+      }));
+  }
+
   // Startvärden innan den delade konfigurationen har hunnit laddas -
   // håller _render()/_update() säkra att köra på en tom uppsättning.
   _defaultConfig() {
@@ -197,6 +268,7 @@ class FamilyPlannerCard extends HTMLElement {
       persons: [],
       calendars: [],
       calendars_label: "Övrigt",
+      away_calendars: [],
       general: [],
       start_collapsed: false,
       countdowns: { max_shown: 5, items: [] },
@@ -233,6 +305,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeFetchForecast();
     this._maybeFetchMonthEvents();
     this._maybeFetchWeekEvents();
+    this._maybeFetchAwayStatus();
     this._maybeLoadSharedConfig();
   }
 
@@ -260,6 +333,7 @@ class FamilyPlannerCard extends HTMLElement {
         persons: this._normalizePersons(data.persons),
         calendars: this._normalizeCalendars(data.calendars),
         calendars_label: data.calendars_label || "Övrigt",
+        away_calendars: this._normalizeAwayCalendars(data.away_calendars),
         general: Array.isArray(data.general) ? data.general : [],
         start_collapsed: !!data.start_collapsed,
         countdowns: {
@@ -296,11 +370,55 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeFetchMonthEvents();
     this._maybeFetchWeekEvents();
     this._maybeFetchForecast();
+    this._maybeFetchAwayStatus();
   }
 
-  // Alla kalenderkällor - personer med calendar_entity + fristående
-  // "calendars" som inte hör till en person - i ett enhetligt format som
-  // både veckoschemat och månadskalendern bygger på.
+  // Hämtar händelser för alla "borta hos andra föräldern"-kalendrar för
+  // ett fönster kring idag (igår-imorgon, för att säkert fånga en helg-
+  // händelse som redan pågår när kortet laddas) - används för att gråa ut
+  // ett barn i Idag-vyn medan de är borta, se _isPersonAwayNow().
+  async _maybeFetchAwayStatus() {
+    const cfg = this._config;
+    const awayCals = (cfg && cfg.away_calendars) || [];
+    if (awayCals.length === 0 || !this._hass) return;
+    const cache = this._awayEventsCache;
+    const fresh = cache && Date.now() - cache.fetchedAt < 5 * 60 * 1000;
+    if (fresh || this._awayLoading) return;
+
+    this._awayLoading = true;
+    try {
+      const today = new Date();
+      const start = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+      const end = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 2);
+      const entityIds = [...new Set(awayCals.map((a) => a.entity))];
+      const data = await this._fetchCalendarEvents(entityIds, start, end);
+      this._awayEventsCache = { fetchedAt: Date.now(), data };
+    } finally {
+      this._awayLoading = false;
+    }
+    this._update();
+  }
+
+  // Är personen just nu borta hos andra föräldern - dvs täcks "nu" av en
+  // händelse i någon av de "borta"-kalendrar som är bundna till dem
+  // (via away_calendars[].persons, se personMatchKey/_calendarSources).
+  _isPersonAwayNow(p) {
+    const cfg = this._config;
+    const cache = this._awayEventsCache;
+    if (!cache) return false;
+    const key = personMatchKey(p);
+    if (!key) return false;
+    return (cfg.away_calendars || [])
+      .filter((a) => (a.persons || []).includes(key))
+      .some((a) => (cache.data[a.entity] || []).some((ev) => eventCoversNow(ev)));
+  }
+
+  // Alla kalenderkällor - personers egna calendar_entity, "borta hos andra
+  // föräldern"-kalendrar bundna till 1+ personer, och fristående "calendars"
+  // som inte hör till någon person - i ett enhetligt format som veckoschema,
+  // månadskalender och Idag-vyns "borta nu"-koll alla bygger på. En källa
+  // hör till en persons rad om personIdxs innehåller personens index;
+  // personIdxs: [] betyder att den hamnar i den delade "Övrigt"-raden.
   _calendarSources() {
     const cfg = this._config;
     if (!cfg) return [];
@@ -314,18 +432,33 @@ class FamilyPlannerCard extends HTMLElement {
         name: this._personDisplay(p).name,
         color: p.color || "var(--primary-color)",
         calendar_entity: p.calendar_entity,
-        isPerson: true,
+        personIdxs: [idx],
+        isAway: false,
         iconKeywords: this._iconKeywordsFor(p),
+      }));
+    const awaySources = (cfg.away_calendars || [])
+      .filter((a) => a.entity)
+      .map((a, awayIdx) => ({
+        key: `away:${awayIdx}`,
+        name: a.name || a.entity,
+        color: a.color || "#95a5a6",
+        calendar_entity: a.entity,
+        personIdxs: cfg.persons
+          .map((p, idx) => idx)
+          .filter((idx) => (a.persons || []).includes(personMatchKey(cfg.persons[idx]))),
+        isAway: true,
+        iconKeywords: [],
       }));
     const sharedSources = (cfg.calendars || []).map((c) => ({
       key: `cal:${c.entity}`,
       name: c.name,
       color: c.color,
       calendar_entity: c.entity,
-      isPerson: false,
+      personIdxs: [],
+      isAway: false,
       iconKeywords: cfg.icon_keywords,
     }));
-    return [...personSources, ...sharedSources];
+    return [...personSources, ...awaySources, ...sharedSources];
   }
 
   _startOfThisWeek() {
@@ -516,6 +649,7 @@ class FamilyPlannerCard extends HTMLElement {
           padding: 10px 0; border-bottom: 1px solid var(--divider-color);
         }
         .fpc-person-row:last-child { border-bottom: none; }
+        .fpc-person-away { opacity: 0.45; filter: grayscale(1); }
         .fpc-avatar {
           width: 36px; height: 36px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
@@ -851,17 +985,17 @@ class FamilyPlannerCard extends HTMLElement {
 
     cfg.persons.forEach((p, idx) => {
       const { name } = this._personDisplay(p);
-      const src = sources.find((s) => s.key === `person:${idx}`);
+      const personSrcs = sources.filter((s) => s.personIdxs.includes(idx));
       lines.push(name + ":");
       weekDates.forEach((dateIso, i) => {
-        const events = src ? this._weekDayEvents([src], dateIso) : [];
+        const events = this._weekDayEvents(personSrcs, dateIso);
         const val = events.length > 0 ? events.map((ev) => ev.summary || "(utan titel)").join(", ") : "–";
         lines.push(`  ${DAY_LABELS[i]}${i === todayIdx ? " (idag)" : ""}: ${val}`);
       });
       lines.push("");
     });
 
-    const sharedSources = sources.filter((s) => !s.isPerson);
+    const sharedSources = sources.filter((s) => s.personIdxs.length === 0);
     if (sharedSources.length > 0) {
       lines.push(cfg.calendars_label + ":");
       weekDates.forEach((dateIso, i) => {
@@ -907,7 +1041,11 @@ class FamilyPlannerCard extends HTMLElement {
       const items = cfg.countdowns.items
         .map((it) => {
           const st = this._stateObj(it.entity);
-          const days = st ? daysUntil(st.state) : null;
+          // date_attribute är valfritt - vissa sensorer (t.ex. färdiga
+          // "dagar kvar"-integrationer) har redan ett antal dagar som
+          // state och lägger själva datumet i ett attribut istället.
+          const dateVal = st ? (it.date_attribute ? st.attributes[it.date_attribute] : st.state) : undefined;
+          const days = dateVal !== undefined ? daysUntil(dateVal) : null;
           return { ...it, days };
         })
         .filter((it) => it.days !== null);
@@ -980,8 +1118,9 @@ class FamilyPlannerCard extends HTMLElement {
               return `<div class="fpc-person-state-line">${badge}${fpcEsc(text)}</div>`;
             })
             .join("");
+          const away = this._isPersonAwayNow(p);
           return `
-            <div class="fpc-person-row">
+            <div class="fpc-person-row${away ? " fpc-person-away" : ""}">
               <div class="fpc-avatar" style="background:${picture ? "transparent" : color}">
                 ${avatarInner}
               </div>
@@ -1089,10 +1228,10 @@ class FamilyPlannerCard extends HTMLElement {
       const rows = cfg.persons
         .map((p, idx) => {
           const { name } = this._personDisplay(p);
-          const src = sources.find((s) => s.key === `person:${idx}`);
+          const personSrcs = sources.filter((s) => s.personIdxs.includes(idx));
           const cells = weekDates
             .map((dateIso, i) => {
-              const events = src ? this._weekDayEvents([src], dateIso) : [];
+              const events = this._weekDayEvents(personSrcs, dateIso);
               return renderWeekCell(events, i === todayIdx);
             })
             .join("");
@@ -1100,7 +1239,7 @@ class FamilyPlannerCard extends HTMLElement {
         })
         .join("");
 
-      const sharedSources = sources.filter((s) => !s.isPerson);
+      const sharedSources = sources.filter((s) => s.personIdxs.length === 0);
       let sharedRow = "";
       if (sharedSources.length > 0) {
         const cells = weekDates
@@ -1126,18 +1265,17 @@ class FamilyPlannerCard extends HTMLElement {
     sources.forEach((src) => {
       const events = cache.data[src.calendar_entity] || [];
       events.forEach((ev) => {
-        const start = ev.start && (ev.start.dateTime || ev.start.date);
-        if (!start) return;
-        const evDate = isoDate(new Date(start));
-        if (evDate === dateIso) {
-          results.push({
-            ...ev,
-            sourceKey: src.key,
-            sourceName: src.name,
-            sourceColor: src.color,
-            sourceIconKeywords: src.iconKeywords,
-          });
-        }
+        // eventCoversDate (inte bara startdatum) så flerdagarshändelser -
+        // en "borta"-helg, ett sommarlov - visas/räknas varje dag de pågår.
+        if (!eventCoversDate(ev, dateIso)) return;
+        results.push({
+          ...ev,
+          sourceKey: src.key,
+          sourceName: src.name,
+          sourceColor: src.color,
+          sourceIconKeywords: src.iconKeywords,
+          sourceIsAway: !!src.isAway,
+        });
       });
     });
     return results;
@@ -1272,6 +1410,16 @@ class FamilyPlannerCard extends HTMLElement {
       const allEvents = this._eventsForDate(dIso);
       const visibleEvents = allEvents.filter((ev) => !this._hiddenSources.has(ev.sourceKey));
       const vacationColor = this._vacationColorForDate(dIso, allEvents);
+      // "Borta hos andra föräldern"-bakgrund går före semestermarkering -
+      // en färg per aktiv borta-kalender den dagen, delat i lika stora
+      // horisontella fält om flera barn är borta samtidigt (olika kalendrar).
+      // Bygger på allEvents (inte visibleEvents) - precis som semester-
+      // markeringen ska filter-chipsen bara dölja prickar/lista, inte ändra
+      // vem som faktiskt är borta den dagen.
+      const awayColors = [
+        ...new Set(allEvents.filter((ev) => ev.sourceIsAway).map((ev) => ev.sourceColor)),
+      ];
+      const dayBackground = stripeBackground(awayColors) || vacationColor;
       const dots = visibleEvents
         .slice(0, 6)
         .map((ev) => `<div class="fpc-month-dot" style="background:${ev.sourceColor}"></div>`)
@@ -1285,7 +1433,7 @@ class FamilyPlannerCard extends HTMLElement {
       ]
         .filter(Boolean)
         .join(" ");
-      const bgStyle = vacationColor && !isToday ? ` style="background:${vacationColor}"` : "";
+      const bgStyle = dayBackground && !isToday ? ` style="background:${dayBackground}"` : "";
       cells += `
         <div class="${classes}" data-date="${dIso}"${bgStyle}>
           <div class="fpc-month-daynum">${d.getDate()}</div>

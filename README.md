@@ -76,10 +76,13 @@ månadskalender, semestermarkering, TTS och allmänna sensorer - se
 ## Nedräkningsraden (överst)
 
 Lägg till valfritt antal nedräkningar under **Nedräkningar** i
-sidopanelen: en entity-picker, ett namn och en "Visa alltid"-kryssruta
-per post. Varje entitets `state` ska vara ett datum (`YYYY-MM-DD`,
-funkar även med fullt datetime). Kortet räknar ut antal dagar kvar och
-sorterar automatiskt på närmast i tid.
+sidopanelen: en entity-picker, ett namn, ett valfritt attributnamn och en
+"Visa alltid"-kryssruta per post. Datumet läses från entitetens `state`
+(`YYYY-MM-DD`, funkar även med fullt datetime) - eller, om ett
+**attribut med datum** anges, från det attributet istället (för sensorer
+som redan har ett eget "dagar kvar"-tal som state och lägger själva
+datumet i ett attribut, t.ex. `next_date`). Kortet räknar ut antal dagar
+kvar och sorterar automatiskt på närmast i tid.
 
 - "Hur många nedräkningar som visas normalt" styr hur många som visas
   (default 5).
@@ -179,6 +182,32 @@ Alla kalendrar i listan visas i månadskalendern precis som personers
 kalendrar (egna filter-chips och prickar), men i veckoschemat samlas de
 i **en enda delad rad** istället för en rad var.
 
+## Borta hos andra föräldern
+
+För familjer med barn som växelvis bor hos en annan förälder: lägg till en
+eller flera kalendrar under **Borta hos andra föräldern** i sidopanelen
+(kalender-entitet, en text som "Hos pappa", en färg, och vilka
+barn/personer den gäller för — en kalender kan gälla för flera barn på
+en gång). Kalendern får sina händelser precis som vilken kalender som
+helst (t.ex. synkad från en samarbetsapp eller en delad Google-kalender).
+
+- **Idag-vyn:** ett barn tonas ner (gråtonas) hela raden så länge en
+  händelse i en av deras borta-kalendrar pågår just nu.
+- **Månadskalendern:** dagar som täcks av en borta-händelse färgas i
+  kalenderns bakgrundsfärg. Är två barn borta samma dag med olika
+  kalendrar/färger delas dagcellen i lika stora horisontella fält, en
+  färg per kalender. Går före semestermarkeringen om båda skulle träffa
+  samma dag, och (precis som semestermarkeringen) ignorerar filter-chipsen
+  ovanför kalendern — de döljer bara prickar/händelselistan, inte vem som
+  faktiskt är borta.
+- Kalendern dyker även upp som en egen rad-källa i veckoschemat under
+  respektive barns rad, och i månadsvyns dagsdetalj med den angivna
+  texten, precis som delade kalendrar.
+
+Flerdagarshändelser (t.ex. en hel "fre–sön hos pappa"-helg) räknas nu
+korrekt varje dag de pågår, inte bara på startdagen — samma fix gäller
+även semestermarkeringen och de vanliga kalendrarna.
+
 ## Notis-badge i headern
 
 En liten röd badge med antal aktiva allmänna sensorer visas bredvid
@@ -215,11 +244,12 @@ direkt i vyn.
 ## Filtrera kalendrar (vecka + månad)
 
 Ovanför kalenderrutnätet visas klickbara chips, en per person med
-`calendar_entity` samt en per post i `calendars`. Klick döljer/visar den
-källans prickar och händelser i månadskalendern (inklusive
-dagsdetalj-listan) **och** i veckoschemat ovanför — samma filter gäller
-båda vyerna. Påverkar inte semestermarkeringen, som alltid tar hänsyn till
-alla kalendrar oavsett filter.
+`calendar_entity`, en per borta-kalender, samt en per post i `calendars`.
+Klick döljer/visar den källans prickar och händelser i månadskalendern
+(inklusive dagsdetalj-listan) **och** i veckoschemat ovanför — samma
+filter gäller båda vyerna. Påverkar inte semestermarkeringen eller
+borta-bakgrunden i månadskalendern, som alltid tar hänsyn till alla
+kalendrar oavsett filter.
 
 ## Skapa händelser genom att dra i månadskalendern
 
@@ -261,9 +291,11 @@ template:
 Veckoschemat läser **samma `calendar_entity`** som månadskalendern — inga
 separata vecko-sensorer. Kortet hämtar innevarande veckas händelser
 (måndag–söndag) direkt via Home Assistants kalender-API och listar
-titlarna (flera händelser samma dag separeras med " • "). Saknar en
-person `calendar_entity` visas ett streck (`–`) i alla kolumner för den
-raden.
+titlarna (flera händelser samma dag separeras med " • "). En persons rad
+visar även händelser från alla borta-kalendrar som barnet är kopplat
+till, blandat med deras egna kalenderhändelser. Saknar en person
+`calendar_entity` och inga borta-kalendrar visas ett streck (`–`) i alla
+kolumner för den raden.
 
 ## Allmänna raden (idag)
 
@@ -279,9 +311,9 @@ Sidopanelen **"Familjeplanering"** dyker upp i sidomenyn så fort
 integrationen är installerad (se [Installation](#installation) högst
 upp) - inget extra steg behövs för att få fram själva panelen. Den är
 den **enda** platsen att konfigurera Family Planner Card på: titel,
-nedräkningar, väder, personer, delade kalendrar, globala ikon-nyckelord,
-månadskalender, semestermarkering, TTS och allmänna sensorer. Bygg upp
-allt och klicka **Spara**.
+nedräkningar, väder, personer, delade kalendrar, borta-kalendrar, globala
+ikon-nyckelord, månadskalender, semestermarkering, TTS och allmänna
+sensorer. Bygg upp allt och klicka **Spara**.
 
 Datan lagras i Home Assistants egen storage
 (`.storage/family_planner_config`), delad mellan alla som loggar in på

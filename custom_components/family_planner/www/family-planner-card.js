@@ -163,6 +163,17 @@ function eventCoversNow(ev) {
   return now >= new Date(startRaw) && now < new Date(endRaw);
 }
 
+// Delade mått för månadsvyns händelsestaplar - används både för att
+// positionera staplarna (margin-top per lane) och för att räkna ut hur
+// hög en dagcell/veckorad minst måste vara (min-height) för att rymma
+// dem. Måste hållas i synk eftersom cellernas min-height är det som
+// faktiskt garanterar utrymmet - att bara lita på att webbläsaren
+// växer raden utifrån en stapels margin-top är inte tillförlitligt i
+// alla webbläsare (innehåll kan hamna dolt bakom nästa veckas rad).
+const MONTH_MAX_VISIBLE_LANES = 3;
+const MONTH_LANE_HEIGHT = 15;
+const MONTH_LANES_TOP_OFFSET = 20; // plats för datumsiffran ovanför första lane
+
 // Tilldelar varje händelse (objekt med startCol/endCol, 0-6 inom en
 // veckorad) en "lane" (rad) så att inga två händelser i samma lane
 // överlappar i kolumn - klassisk girig intervallschemaläggning, samma
@@ -1432,8 +1443,11 @@ class FamilyPlannerCard extends HTMLElement {
 
     // Beräknas för hela rutnätet innan cellerna byggs, eftersom varje
     // dagcell behöver veta sin egen "+N dolda"-räknare (se
-    // _monthEventBarsHtml) för badgen i hörnet.
-    const { html: eventBarsHtml, overflowByDate } = this._monthEventBarsHtml(gridStart, sources);
+    // _monthEventBarsHtml) för badgen i hörnet, och sin veckas lane-antal
+    // för att kunna sätta en garanterat tillräcklig min-height (se
+    // MONTH_MAX_VISIBLE_LANES-kommentaren - lita inte på att webbläsaren
+    // själv växer raden utifrån en stapels margin-top).
+    const { html: eventBarsHtml, overflowByDate, laneCountByWeek } = this._monthEventBarsHtml(gridStart, sources);
 
     let cells = "";
     for (let i = 0; i < 42; i++) {
@@ -1447,6 +1461,8 @@ class FamilyPlannerCard extends HTMLElement {
       const allEvents = this._eventsForDate(dIso);
       const vacationColor = this._vacationColorForDate(dIso, allEvents);
       const dayBackground = vacationColor;
+      const weekLaneCount = laneCountByWeek[Math.floor(i / 7)] || 0;
+      const minHeight = Math.max(46, MONTH_LANES_TOP_OFFSET + weekLaneCount * MONTH_LANE_HEIGHT + 6);
       const overflow = overflowByDate[dIso] || 0;
       const overflowBadge = overflow > 0 ? `<div class="fpc-month-overflow">+${overflow}</div>` : "";
       const classes = [
@@ -1458,7 +1474,11 @@ class FamilyPlannerCard extends HTMLElement {
       ]
         .filter(Boolean)
         .join(" ");
-      const styleParts = [`grid-row:${2 + Math.floor(i / 7)}`, `grid-column:${(i % 7) + 1}`];
+      const styleParts = [
+        `grid-row:${2 + Math.floor(i / 7)}`,
+        `grid-column:${(i % 7) + 1}`,
+        `min-height:${minHeight}px`,
+      ];
       if (dayBackground && !isToday) styleParts.push(`background:${dayBackground}`);
       cells += `
         <div class="${classes}" data-date="${dIso}" style="${styleParts.join("; ")};">
@@ -1538,11 +1558,9 @@ class FamilyPlannerCard extends HTMLElement {
   // dagar med fler händelser än så får en "+N"-badge istället (räknas
   // per dag, inte per vecka, i overflowByDate).
   _monthEventBarsHtml(gridStart, sources) {
-    const MAX_VISIBLE_LANES = 3;
-    const LANE_HEIGHT = 15;
-    const TOP_OFFSET = 20; // plats för datumsiffran ovanför första lane
     let html = "";
     const overflowByDate = {};
+    const laneCountByWeek = [];
 
     for (let week = 0; week < 6; week++) {
       const weekStart = new Date(gridStart);
@@ -1555,9 +1573,10 @@ class FamilyPlannerCard extends HTMLElement {
 
       const weekEvents = this._weekEventsForLanes(weekDates, sources);
       const { events: placed } = packEventLanes(weekEvents);
+      laneCountByWeek.push(Math.min(placed.length ? Math.max(...placed.map((e) => e.lane)) + 1 : 0, MONTH_MAX_VISIBLE_LANES));
 
       placed.forEach((ev) => {
-        if (ev.lane >= MAX_VISIBLE_LANES) {
+        if (ev.lane >= MONTH_MAX_VISIBLE_LANES) {
           for (let col = ev.startCol; col <= ev.endCol; col++) {
             const dIso = weekDates[col];
             overflowByDate[dIso] = (overflowByDate[dIso] || 0) + 1;
@@ -1565,13 +1584,13 @@ class FamilyPlannerCard extends HTMLElement {
           return;
         }
         const badge = renderIconBadge(matchIcon(ev.summary, ev.iconKeywords));
-        const top = TOP_OFFSET + ev.lane * LANE_HEIGHT;
+        const top = MONTH_LANES_TOP_OFFSET + ev.lane * MONTH_LANE_HEIGHT;
         html += `
           <div class="fpc-month-event-bar" style="grid-row:${week + 2}; grid-column:${ev.startCol + 1} / ${ev.endCol + 2}; background:${ev.color}; margin-top:${top}px;">${badge}${fpcEsc(ev.summary)}</div>
         `;
       });
     }
-    return { html, overflowByDate };
+    return { html, overflowByDate, laneCountByWeek };
   }
 
   _renderMonthDayDetail() {

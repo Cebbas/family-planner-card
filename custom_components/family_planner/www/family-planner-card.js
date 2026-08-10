@@ -1413,7 +1413,15 @@ class FamilyPlannerCard extends HTMLElement {
     const todayIso = isoDate(new Date());
     const gridEl = this.shadowRoot.querySelector("#fpc-month-grid");
 
-    const weekdayHeaders = DAY_LABELS.map((l) => `<div class="fpc-month-weekday">${l}</div>`).join("");
+    // Explicit grid-row/-column på både rubriker och dagceller - inte bara
+    // på händelsestaplarna. CSS Grid placerar ALLA explicit-positionerade
+    // objekt först, oavsett DOM-ordning, och auto-flödar sedan resten runt
+    // dem - om dagcellerna saknar egen placering "flyter" de runt de redan
+    // upptagna stapel-rutorna och hamnar i fel rad/kolumn (det som såg ut
+    // som att datumen inte hamnade i sina rutor).
+    const weekdayHeaders = DAY_LABELS.map(
+      (l, i) => `<div class="fpc-month-weekday" style="grid-row:1; grid-column:${i + 1};">${l}</div>`
+    ).join("");
 
     const dragMin = this._dragging && this._dragStart && this._dragEnd
       ? (this._dragStart < this._dragEnd ? this._dragStart : this._dragEnd)
@@ -1450,9 +1458,10 @@ class FamilyPlannerCard extends HTMLElement {
       ]
         .filter(Boolean)
         .join(" ");
-      const bgStyle = dayBackground && !isToday ? ` style="background:${dayBackground}"` : "";
+      const styleParts = [`grid-row:${2 + Math.floor(i / 7)}`, `grid-column:${(i % 7) + 1}`];
+      if (dayBackground && !isToday) styleParts.push(`background:${dayBackground}`);
       cells += `
-        <div class="${classes}" data-date="${dIso}"${bgStyle}>
+        <div class="${classes}" data-date="${dIso}" style="${styleParts.join("; ")};">
           <div class="fpc-month-daynum">${d.getDate()}</div>
           ${overflowBadge}
         </div>

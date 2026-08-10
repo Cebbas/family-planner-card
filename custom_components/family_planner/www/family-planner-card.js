@@ -776,17 +776,24 @@ class FamilyPlannerCard extends HTMLElement {
           background: none; border: none; color: var(--primary-color);
           font-size: 1.3em; cursor: pointer; padding: 4px 10px; line-height: 1;
         }
-        .fpc-month-grid {
-          display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px;
-        }
+        .fpc-month-grid { display: flex; flex-direction: column; }
+        .fpc-month-weekday-row { display: flex; }
         .fpc-month-weekday {
-          text-align: center; font-size: 0.72em; color: var(--secondary-text-color);
-          padding-bottom: 4px;
+          flex: 1 1 0; min-width: 0; text-align: center; font-size: 0.72em;
+          color: var(--secondary-text-color); padding-bottom: 4px;
         }
+        .fpc-month-week { position: relative; display: flex; margin-bottom: 3px; }
         .fpc-month-cell {
-          position: relative; min-height: 46px; border-radius: 8px; padding: 4px;
+          flex: 1 1 0; min-width: 0; position: relative; min-height: 46px;
+          border-radius: 4px; padding: 4px;
           display: flex; flex-direction: column; align-items: flex-start;
           cursor: pointer; background: var(--secondary-background-color, rgba(127,127,127,0.06));
+          /* Ingen margin/gap mellan cellerna - staplarnas left/width räknas
+             ut som exakta procentandelar av veckoradens bredd (se
+             _monthEventBarsHtml) och skulle annars hamna fel om cellerna
+             åt av bredden med marginaler. Tunn inset-skugga ger ändå en
+             visuell avgränsning utan att påverka layout-geometrin. */
+          box-shadow: inset 0 0 0 1px var(--card-background-color, white);
         }
         .fpc-month-cell.fpc-outside { opacity: 0.35; }
         .fpc-month-cell.fpc-today-cell {
@@ -794,9 +801,16 @@ class FamilyPlannerCard extends HTMLElement {
         }
         .fpc-month-cell.fpc-selected { outline: 2px solid var(--primary-color); }
         .fpc-month-daynum { font-size: 0.82em; }
+        /* Absolut-positionerade inom sin .fpc-month-week (inte CSS Grid) -
+           left/width räknas ut i procent av veckoradens bredd i JS
+           (_monthEventBarsHtml). Grid-baserad positionering (grid-column +
+           justify-self:stretch) visade sig inte tillförlitligt fylla ut
+           sin kolumnbredd i praktiken - staplarna kollapsade till några få
+           pixlar. Absolut positionering med procentsatser är entydigt och
+           beror inte på grid-stretch-semantik. */
         .fpc-month-event-bar {
-          align-self: start; justify-self: stretch; height: 13px; border-radius: 3px;
-          margin-left: 1px; margin-right: 1px; pointer-events: none;
+          position: absolute; height: 13px; border-radius: 3px;
+          pointer-events: none; box-sizing: border-box;
           color: white; font-size: 0.62em; line-height: 13px; padding: 0 3px;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
@@ -1424,15 +1438,9 @@ class FamilyPlannerCard extends HTMLElement {
     const todayIso = isoDate(new Date());
     const gridEl = this.shadowRoot.querySelector("#fpc-month-grid");
 
-    // Explicit grid-row/-column på både rubriker och dagceller - inte bara
-    // på händelsestaplarna. CSS Grid placerar ALLA explicit-positionerade
-    // objekt först, oavsett DOM-ordning, och auto-flödar sedan resten runt
-    // dem - om dagcellerna saknar egen placering "flyter" de runt de redan
-    // upptagna stapel-rutorna och hamnar i fel rad/kolumn (det som såg ut
-    // som att datumen inte hamnade i sina rutor).
-    const weekdayHeaders = DAY_LABELS.map(
-      (l, i) => `<div class="fpc-month-weekday" style="grid-row:1; grid-column:${i + 1};">${l}</div>`
-    ).join("");
+    const weekdayHeaders = `<div class="fpc-month-weekday-row">${DAY_LABELS.map(
+      (l) => `<div class="fpc-month-weekday">${l}</div>`
+    ).join("")}</div>`;
 
     const dragMin = this._dragging && this._dragStart && this._dragEnd
       ? (this._dragStart < this._dragEnd ? this._dragStart : this._dragEnd)
@@ -1442,53 +1450,53 @@ class FamilyPlannerCard extends HTMLElement {
       : null;
 
     // Beräknas för hela rutnätet innan cellerna byggs, eftersom varje
-    // dagcell behöver veta sin egen "+N dolda"-räknare (se
-    // _monthEventBarsHtml) för badgen i hörnet, och sin veckas lane-antal
-    // för att kunna sätta en garanterat tillräcklig min-height (se
-    // MONTH_MAX_VISIBLE_LANES-kommentaren - lita inte på att webbläsaren
-    // själv växer raden utifrån en stapels margin-top).
-    const { html: eventBarsHtml, overflowByDate, laneCountByWeek } = this._monthEventBarsHtml(gridStart, sources);
+    // dagcell behöver veta sin egen "+N dolda"-räknare för badgen i
+    // hörnet, och sin veckas lane-antal för att kunna sätta en
+    // garanterat tillräcklig min-height (se MONTH_MAX_VISIBLE_LANES-
+    // kommentaren - lita inte på att webbläsaren själv växer raden
+    // utifrån en stapels top-offset).
+    const { weeks: eventBarsByWeek, overflowByDate, laneCountByWeek } = this._monthEventBarsHtml(gridStart, sources);
 
-    let cells = "";
-    for (let i = 0; i < 42; i++) {
-      const d = new Date(gridStart);
-      d.setDate(d.getDate() + i);
-      const dIso = isoDate(d);
-      const outside = d.getMonth() !== month;
-      const isToday = dIso === todayIso;
-      const isSelected = this._selectedDate === dIso;
-      const isDragHighlighted = dragMin && dIso >= dragMin && dIso <= dragMax;
-      const allEvents = this._eventsForDate(dIso);
-      const vacationColor = this._vacationColorForDate(dIso, allEvents);
-      const dayBackground = vacationColor;
-      const weekLaneCount = laneCountByWeek[Math.floor(i / 7)] || 0;
+    let weeksHtml = "";
+    for (let week = 0; week < 6; week++) {
+      const weekLaneCount = laneCountByWeek[week] || 0;
       const minHeight = Math.max(46, MONTH_LANES_TOP_OFFSET + weekLaneCount * MONTH_LANE_HEIGHT + 6);
-      const overflow = overflowByDate[dIso] || 0;
-      const overflowBadge = overflow > 0 ? `<div class="fpc-month-overflow">+${overflow}</div>` : "";
-      const classes = [
-        "fpc-month-cell",
-        outside ? "fpc-outside" : "",
-        isToday ? "fpc-today-cell" : "",
-        isSelected ? "fpc-selected" : "",
-        isDragHighlighted ? "fpc-dragging" : "",
-      ]
-        .filter(Boolean)
-        .join(" ");
-      const styleParts = [
-        `grid-row:${2 + Math.floor(i / 7)}`,
-        `grid-column:${(i % 7) + 1}`,
-        `min-height:${minHeight}px`,
-      ];
-      if (dayBackground && !isToday) styleParts.push(`background:${dayBackground}`);
-      cells += `
-        <div class="${classes}" data-date="${dIso}" style="${styleParts.join("; ")};">
-          <div class="fpc-month-daynum">${d.getDate()}</div>
-          ${overflowBadge}
-        </div>
-      `;
+      let cellsHtml = "";
+      for (let col = 0; col < 7; col++) {
+        const i = week * 7 + col;
+        const d = new Date(gridStart);
+        d.setDate(d.getDate() + i);
+        const dIso = isoDate(d);
+        const outside = d.getMonth() !== month;
+        const isToday = dIso === todayIso;
+        const isSelected = this._selectedDate === dIso;
+        const isDragHighlighted = dragMin && dIso >= dragMin && dIso <= dragMax;
+        const allEvents = this._eventsForDate(dIso);
+        const vacationColor = this._vacationColorForDate(dIso, allEvents);
+        const overflow = overflowByDate[dIso] || 0;
+        const overflowBadge = overflow > 0 ? `<div class="fpc-month-overflow">+${overflow}</div>` : "";
+        const classes = [
+          "fpc-month-cell",
+          outside ? "fpc-outside" : "",
+          isToday ? "fpc-today-cell" : "",
+          isSelected ? "fpc-selected" : "",
+          isDragHighlighted ? "fpc-dragging" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const styleParts = [`min-height:${minHeight}px`];
+        if (vacationColor && !isToday) styleParts.push(`background:${vacationColor}`);
+        cellsHtml += `
+          <div class="${classes}" data-date="${dIso}" style="${styleParts.join("; ")};">
+            <div class="fpc-month-daynum">${d.getDate()}</div>
+            ${overflowBadge}
+          </div>
+        `;
+      }
+      weeksHtml += `<div class="fpc-month-week">${cellsHtml}${eventBarsByWeek[week]}</div>`;
     }
 
-    gridEl.innerHTML = weekdayHeaders + cells + eventBarsHtml;
+    gridEl.innerHTML = weekdayHeaders + weeksHtml;
     gridEl.querySelectorAll(".fpc-month-cell").forEach((cell) => {
       const dIso = cell.getAttribute("data-date");
       cell.addEventListener("pointerdown", (ev) => {
@@ -1551,14 +1559,17 @@ class FamilyPlannerCard extends HTMLElement {
   // Bygger sammanhängande färgade rader (à la iOS Kalender) för ALLA
   // aktiviteter i månadsvyn - inte bara "borta hos andra föräldern" -
   // istället för att bara visa prickar. Överlappande händelser samma
-  // dag staplas i egna "lanes" (packEventLanes). Bryggar över mellan-
-  // rummet mellan dagceller korrekt genom att placeras som egna objekt
-  // i samma CSS-grid (gridEl) med explicit grid-row/-column per
-  // veckorad. Begränsar synliga lanes per vecka (MAX_VISIBLE_LANES) -
-  // dagar med fler händelser än så får en "+N"-badge istället (räknas
-  // per dag, inte per vecka, i overflowByDate).
+  // dag staplas i egna "lanes" (packEventLanes). Positioneras absolut
+  // (left/width i procent av veckoradens bredd) inom sin .fpc-month-week
+  // istället för via CSS Grid - grid-column+justify-self:stretch visade
+  // sig inte tillförlitligt fylla sin kolumn i praktiken. Begränsar
+  // synliga lanes per vecka (MONTH_MAX_VISIBLE_LANES) - dagar med fler
+  // händelser än så får en "+N"-badge istället (räknas per dag, inte per
+  // vecka, i overflowByDate). Returnerar en HTML-sträng per veckorad
+  // (weeks[0..5]), inte en enda platt sträng, eftersom staplarna nu
+  // måste in i respektive veckas egen wrapper (för position:relative).
   _monthEventBarsHtml(gridStart, sources) {
-    let html = "";
+    const weeks = [];
     const overflowByDate = {};
     const laneCountByWeek = [];
 
@@ -1575,6 +1586,7 @@ class FamilyPlannerCard extends HTMLElement {
       const { events: placed } = packEventLanes(weekEvents);
       laneCountByWeek.push(Math.min(placed.length ? Math.max(...placed.map((e) => e.lane)) + 1 : 0, MONTH_MAX_VISIBLE_LANES));
 
+      let weekHtml = "";
       placed.forEach((ev) => {
         if (ev.lane >= MONTH_MAX_VISIBLE_LANES) {
           for (let col = ev.startCol; col <= ev.endCol; col++) {
@@ -1585,12 +1597,15 @@ class FamilyPlannerCard extends HTMLElement {
         }
         const badge = renderIconBadge(matchIcon(ev.summary, ev.iconKeywords));
         const top = MONTH_LANES_TOP_OFFSET + ev.lane * MONTH_LANE_HEIGHT;
-        html += `
-          <div class="fpc-month-event-bar" style="grid-row:${week + 2}; grid-column:${ev.startCol + 1} / ${ev.endCol + 2}; background:${ev.color}; margin-top:${top}px;">${badge}${fpcEsc(ev.summary)}</div>
+        const leftPct = (ev.startCol / 7) * 100;
+        const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;
+        weekHtml += `
+          <div class="fpc-month-event-bar" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${ev.color};">${badge}${fpcEsc(ev.summary)}</div>
         `;
       });
+      weeks.push(weekHtml);
     }
-    return { html, overflowByDate, laneCountByWeek };
+    return { weeks, overflowByDate, laneCountByWeek };
   }
 
   _renderMonthDayDetail() {

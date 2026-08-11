@@ -85,6 +85,18 @@ function weekdayIndex(date) {
   return (date.getDay() + 6) % 7;
 }
 
+// ISO 8601-veckonummer (måndag som första veckodag, vecka 1 är veckan
+// som innehåller årets första torsdag) - standardalgoritmen via
+// "torsdagen i veckan". Räknar helt i lokal tid, som resten av filen
+// (startOfCalendarGrid m.fl.) - blandar inte med UTC-konstruerade datum.
+function isoWeekNumber(date) {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  d.setDate(d.getDate() - weekdayIndex(d) + 3);
+  const firstThursday = new Date(d.getFullYear(), 0, 4);
+  firstThursday.setDate(firstThursday.getDate() - weekdayIndex(firstThursday) + 3);
+  return 1 + Math.round((d - firstThursday) / (7 * 86400000));
+}
+
 // Matchar text (case-insensitive, substräng) mot en ordnad lista av
 // {match, icon}. Första träffen vinner. icon kan vara en emoji eller en
 // mdi:-ikon.
@@ -1022,7 +1034,7 @@ class FamilyPlannerCard extends HTMLElement {
         </div>
         <div class="fpc-week">
           <div class="fpc-week-header-row">
-            <div class="fpc-week-title">Veckoschema</div>
+            <div class="fpc-week-title" id="fpc-week-title">Veckoschema</div>
             <button class="fpc-share-btn" id="fpc-share-btn">Dela</button>
           </div>
           <table class="fpc-table" id="fpc-table"></table>
@@ -1358,6 +1370,10 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     // Veckoschema
+    const weekTitleEl = this.shadowRoot.querySelector("#fpc-week-title");
+    if (weekTitleEl) {
+      weekTitleEl.textContent = `Veckoschema (v. ${isoWeekNumber(this._startOfThisWeek())})`;
+    }
     const tableEl = this.shadowRoot.querySelector("#fpc-table");
     if (tableEl) {
       const todayIdx = this._todayKey();

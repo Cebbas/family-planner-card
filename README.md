@@ -286,10 +286,12 @@ template:
           {{ events if events else '' }}
 ```
 
-Har sensorn ett `entity_picture`-attribut används den bilden som badge
-framför raden istället för att matcha texten mot ikon-nyckelord — bra för
-sensorer som redan har en relevant bild (t.ex. från en skol-app), utan
-att behöva bygga en ikon-nyckelordslista för samma sak.
+Har sensorn ett `entity_picture`-attribut visas bara en förstorad bild
+utan text istället för att matcha texten mot ikon-nyckelord — texten
+(ofta ett rått state som "off") är sällan meningsfull när bilden redan
+säger samma sak. Bra för sensorer som redan har en relevant bild (t.ex.
+från en skol-app), utan att behöva bygga en ikon-nyckelordslista för
+samma sak.
 
 ## Hur veckoschemat fylls i
 

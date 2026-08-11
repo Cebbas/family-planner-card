@@ -649,8 +649,8 @@ class FamilyPlannerCard extends HTMLElement {
   // Text-rader för "Idag" - en rad per entitet i p.entities med ett
   // "riktigt" state. Om alla är tomma/okonfigurerade visas en enda
   // placeholder-rad istället för flera identiska "Inget planerat idag".
-  // Bär med sig entityId så badgen kan använda sensorns egen
-  // entity_picture (se _lineBadge) istället för bara ikon-nyckelord.
+  // Bär med sig entityId så raden kan använda sensorns egen entity_picture
+  // (se _renderTodayLine) istället för bara ikon-nyckelord.
   _personTodayLines(p) {
     const ids = Array.isArray(p.entities) ? p.entities : [];
     if (ids.length === 0) return [{ text: "Inget planerat idag", entityId: null }];
@@ -659,13 +659,18 @@ class FamilyPlannerCard extends HTMLElement {
     return real.length > 0 ? real : [{ text: "Inget planerat idag", entityId: null }];
   }
 
-  // Badge för en Idag-rad - sensorns egen entity_picture om den har en,
-  // annars matchning mot ikon-nyckelord som tidigare.
-  _lineBadge(line, keywords) {
+  // HTML för en Idag-rad. Har sensorn en egen entity_picture visas bara
+  // en förstorad bild utan text - texten (ofta ett rått state som "off")
+  // är sällan meningsfull när det redan finns en bild som säger samma
+  // sak. Annars: ikon-nyckelord-badge (om något matchar) + texten som förut.
+  _renderTodayLine(line, keywords) {
     const st = this._stateObj(line.entityId);
     const picture = st && st.attributes && st.attributes.entity_picture;
-    if (picture) return `<img class="fpc-kw-image" src="${picture}" alt="" />`;
-    return renderIconBadge(matchIcon(line.text, keywords));
+    if (picture) {
+      return `<div class="fpc-person-state-line fpc-person-state-picture"><img class="fpc-state-picture" src="${picture}" alt="" /></div>`;
+    }
+    const badge = renderIconBadge(matchIcon(line.text, keywords));
+    return `<div class="fpc-person-state-line">${badge}${fpcEsc(line.text)}</div>`;
   }
 
   _todayKey() {
@@ -717,6 +722,8 @@ class FamilyPlannerCard extends HTMLElement {
           color: var(--secondary-text-color); font-size: 0.88em;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
+        .fpc-person-state-picture { margin-top: 2px; }
+        .fpc-state-picture { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
         .fpc-general-row {
           display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
           padding-top: 14px; margin-top: 4px;
@@ -774,9 +781,9 @@ class FamilyPlannerCard extends HTMLElement {
           background: var(--secondary-background-color, rgba(127,127,127,0.1));
         }
         .fpc-cd-chip.fpc-cd-pinned { border: 1px solid var(--primary-color); }
-        .fpc-cd-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
-        .fpc-cd-days { font-size: 1.15em; font-weight: 600; color: var(--primary-color); }
-        .fpc-cd-name { font-size: 0.78em; text-align: center; line-height: 1.15; }
+        .fpc-cd-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; }
+        .fpc-cd-days { font-size: 1em; font-weight: 600; color: var(--primary-color); }
+        .fpc-cd-name { font-size: 0.7em; text-align: center; line-height: 1.15; }
         .fpc-cd-empty { color: var(--secondary-text-color); font-size: 0.85em; font-style: italic; }
         .fpc-weather-row {
           display: flex; align-items: center; gap: 10px; padding: 8px 0 14px 0;
@@ -1164,7 +1171,10 @@ class FamilyPlannerCard extends HTMLElement {
           const dateVal = st ? (it.date_attribute ? st.attributes[it.date_attribute] : st.state) : undefined;
           const days = dateVal !== undefined ? daysUntil(dateVal) : null;
           const picture = st && st.attributes.entity_picture ? st.attributes.entity_picture : null;
-          return { ...it, days, picture };
+          // Faller tillbaka på entitetens friendly_name istället för det
+          // råa entity_id:t när inget namn satts på nedräkningen i panelen.
+          const displayName = it.name || (st && st.attributes.friendly_name) || it.entity;
+          return { ...it, days, picture, displayName };
         })
         .filter((it) => it.days !== null);
 
@@ -1185,7 +1195,7 @@ class FamilyPlannerCard extends HTMLElement {
               <div class="fpc-cd-chip${it.pinned ? " fpc-cd-pinned" : ""}">
                 ${it.picture ? `<img class="fpc-cd-avatar" src="${it.picture}" alt="" />` : ""}
                 <div class="fpc-cd-days">${daysLabel(it.days)}</div>
-                <div class="fpc-cd-name">${fpcEsc(it.name || it.entity)}</div>
+                <div class="fpc-cd-name">${fpcEsc(it.displayName)}</div>
               </div>
             `
           )
@@ -1232,10 +1242,7 @@ class FamilyPlannerCard extends HTMLElement {
             : `<ha-icon icon="${icon}"></ha-icon>`;
           const personIconKeywords = this._iconKeywordsFor(p);
           const lines = this._personTodayLines(p)
-            .map((line) => {
-              const badge = this._lineBadge(line, personIconKeywords);
-              return `<div class="fpc-person-state-line">${badge}${fpcEsc(line.text)}</div>`;
-            })
+            .map((line) => this._renderTodayLine(line, personIconKeywords))
             .join("");
           const away = this._isPersonAwayNow(p);
           // Sista dagen av en borta-händelse räknas som ankomstdag, så

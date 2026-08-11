@@ -119,24 +119,25 @@ spammar väder-API:et.
 
 ## Ikon-nyckelord (matcha ord i händelser mot en ikon)
 
-Lägg till globala ikon-nyckelord i sidopanelen: ett ord/fras att matcha
-plus en ikon. Ikonen kan vara:
+Lägg till globala ikon-nyckelord i sidopanelen: ett ord/fras att matcha,
+plus en ikon **och/eller** en bild — båda fälten kan sättas samtidigt,
+bilden vinner då om vilken badge som visas. Ikon-fältet kan vara:
 
 - en emoji, t.ex. `⚽`
 - en `mdi:`-ikon, t.ex. `mdi:tooth`
-- en bild-URL eller lokal sökväg, t.ex. `https://example.com/fotboll.png`
-  eller `/local/icons/fotboll.png` — visas som en liten rund bild
+
+Bild-fältet är en bild-URL eller lokal sökväg, t.ex.
+`https://example.com/fotboll.png` eller `/local/icons/fotboll.png` —
+visas som en liten rund bild. Lokala bilder lägger du precis som kortet
+självt i `/config/www/` och pekar på dem som `/local/dinbild.png`.
 
 Kortet söker efter ordet i texten (skiftlägesokänsligt, substräng) och
-visar badgen (ikon/emoji/bild) framför texten — både i "Idag"-raden och i
-varje cell i veckoschemat. Första träffen i listan vinner om flera ord
-matchar samma text.
+visar badgen (bild om satt, annars ikon/emoji) framför texten — både i
+"Idag"-raden och i varje cell i veckoschemat. Första träffen i listan
+vinner om flera ord matchar samma text.
 
 Så om en persons "idag"-sensor har state `"Fotbollsträning 17:00"` visas
 ⚽ framför texten automatiskt, utan att du behöver ändra sensorn.
-
-Lokala bilder lägger du precis som kortet självt i `/config/www/` och
-pekar på dem som `/local/dinbild.png`.
 
 ### Person-specifika ikon-nyckelord
 

@@ -55,6 +55,15 @@ function renderIconBadge(icon) {
   return `<span class="fpp-kw-emoji">${icon}</span>`;
 }
 
+// Förhandsvisning för ett nyckelord som kan ha både `icon` och `image`
+// satta samtidigt - bilden vinner om den finns. Måste hållas i synk med
+// renderKeywordBadge i family-planner-card.js.
+function renderKeywordBadge(kw) {
+  if (!kw) return "";
+  if (kw.image) return `<img class="fpp-kw-image" src="${kw.image}" alt="" />`;
+  return renderIconBadge(kw.icon);
+}
+
 class FamilyPlannerPanel extends HTMLElement {
   constructor() {
     super();
@@ -311,25 +320,35 @@ class FamilyPlannerPanel extends HTMLElement {
         setList(list);
         this._markDirty();
       });
-      const iconInput = this._textInput(kw.icon, "⚽, mdi:soccer, eller bild-URL", (val) => {
+      const iconInput = this._textInput(kw.icon, "⚽ eller mdi:soccer", (val) => {
         const list = [...getList()];
         list[kIdx] = { ...list[kIdx], icon: val };
         setList(list);
-        preview.innerHTML = renderIconBadge(val);
+        preview.innerHTML = renderKeywordBadge(list[kIdx]);
+        this._markDirty();
+      }, "130px");
+      // Egna fält för bild - kan sättas tillsammans med ikonen ovan (t.ex.
+      // en bild i Idag-vyn, men ikonen använd på andra ställen senare).
+      // Bilden vinner om båda är satta, se renderKeywordBadge.
+      const imageInput = this._textInput(kw.image, "Bild-URL (valfri)", (val) => {
+        const list = [...getList()];
+        list[kIdx] = { ...list[kIdx], image: val };
+        setList(list);
+        preview.innerHTML = renderKeywordBadge(list[kIdx]);
         this._markDirty();
       }, "160px");
       const preview = document.createElement("div");
-      preview.innerHTML = renderIconBadge(kw.icon);
+      preview.innerHTML = renderKeywordBadge(kw);
       const removeBtn = this._removeBtn(() => {
         setList(getList().filter((_, i) => i !== kIdx));
         this._markDirty();
         this._render();
       });
-      wrap.appendChild(this._row([matchInput, iconInput, preview, removeBtn]));
+      wrap.appendChild(this._row([matchInput, iconInput, imageInput, preview, removeBtn]));
     });
     wrap.appendChild(
       this._addBtn("+ Lägg till nyckelord", () => {
-        setList([...getList(), { match: "", icon: "" }]);
+        setList([...getList(), { match: "", icon: "", image: "" }]);
         this._markDirty();
         this._render();
       })

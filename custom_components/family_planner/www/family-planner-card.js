@@ -95,12 +95,15 @@ function personMatchKey(p) {
   return (p && (p.name || p.person_entity)) || "";
 }
 
+// Returnerar hela den matchade nyckelordsposten (inte bara ikonen) så att
+// både `icon` och `image` finns kvar för renderKeywordBadge() att välja
+// mellan - ett nyckelord kan ha båda satta samtidigt.
 function matchIcon(text, keywords) {
   if (!text || !Array.isArray(keywords)) return null;
   const lower = String(text).toLowerCase();
   for (const kw of keywords) {
     if (kw.match && lower.includes(String(kw.match).toLowerCase())) {
-      return kw.icon || null;
+      return kw;
     }
   }
   return null;
@@ -207,6 +210,18 @@ function isImagePath(str) {
   return /\.(png|jpe?g|gif|webp|svg)$/i.test(str);
 }
 
+// Migrerar äldre nyckelordsposter (innan `image` fanns som eget fält, en
+// bild-URL kunde bara ligga i `icon`) så befintlig konfiguration ser
+// likadan ut efter uppdateringen - se renderKeywordBadge/matchIcon.
+function normalizeIconKeywords(list) {
+  return (Array.isArray(list) ? list : []).map((kw) => {
+    if (kw.icon && !kw.image && isImagePath(kw.icon)) {
+      return { match: kw.match || "", icon: "", image: kw.icon };
+    }
+    return { match: kw.match || "", icon: kw.icon || "", image: kw.image || "" };
+  });
+}
+
 function renderIconBadge(icon) {
   if (!icon) return "";
   if (icon.startsWith("mdi:")) {
@@ -216,6 +231,16 @@ function renderIconBadge(icon) {
     return `<img class="fpc-kw-image" src="${icon}" alt="" />`;
   }
   return `<span class="fpc-kw-emoji">${icon}</span>`;
+}
+
+// Badge för en matchad ikon-nyckelordspost (se matchIcon) - ett nyckelord
+// kan ha både `image` och `icon` satta samtidigt, bilden vinner om den
+// finns. Skiljer sig från renderIconBadge (som bara tar en enda sträng)
+// genom att jobba med hela posten.
+function renderKeywordBadge(kw) {
+  if (!kw) return "";
+  if (kw.image) return `<img class="fpc-kw-image" src="${kw.image}" alt="" />`;
+  return renderIconBadge(kw.icon);
 }
 
 function fpcEsc(str) {
@@ -258,7 +283,7 @@ class FamilyPlannerCard extends HTMLElement {
         calendar_entity: p.calendar_entity || null,
         icon: p.icon || "mdi:account",
         color: p.color || null,
-        icon_keywords: Array.isArray(p.icon_keywords) ? p.icon_keywords : [],
+        icon_keywords: normalizeIconKeywords(p.icon_keywords),
       }));
   }
 
@@ -366,7 +391,7 @@ class FamilyPlannerCard extends HTMLElement {
         weather: weatherCfg.entity
           ? { entity: weatherCfg.entity, show_week: !!weatherCfg.show_week }
           : null,
-        icon_keywords: Array.isArray(data.icon_keywords) ? data.icon_keywords : [],
+        icon_keywords: normalizeIconKeywords(data.icon_keywords),
         show_month_calendar: data.show_month_calendar !== false,
         vacation_keywords: Array.isArray(data.vacation_keywords) ? data.vacation_keywords : [],
         tts:
@@ -693,7 +718,7 @@ class FamilyPlannerCard extends HTMLElement {
     if (picture) {
       return `<div class="fpc-person-state-line fpc-person-state-picture"><img class="fpc-state-picture" src="${picture}" alt="" /></div>`;
     }
-    const badge = renderIconBadge(matchIcon(line.text, keywords));
+    const badge = renderKeywordBadge(matchIcon(line.text, keywords));
     return `<div class="fpc-person-state-line">${badge}${fpcEsc(line.text)}</div>`;
   }
 
@@ -1373,7 +1398,7 @@ class FamilyPlannerCard extends HTMLElement {
         const html = events
           .map((ev) => {
             const summary = ev.summary || "(utan titel)";
-            const badge = renderIconBadge(matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
+            const badge = renderKeywordBadge(matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
             return `${badge}${fpcEsc(summary)}`;
           })
           .join(" • ");
@@ -1769,7 +1794,7 @@ class FamilyPlannerCard extends HTMLElement {
           }
           return;
         }
-        const badge = renderIconBadge(matchIcon(ev.summary, ev.iconKeywords));
+        const badge = renderKeywordBadge(matchIcon(ev.summary, ev.iconKeywords));
         const top = MONTH_LANES_TOP_OFFSET + ev.lane * MONTH_LANE_HEIGHT;
         const leftPct = (ev.startCol / 7) * 100;
         const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;
@@ -1807,7 +1832,7 @@ class FamilyPlannerCard extends HTMLElement {
       html += events
         .map((ev) => {
           const summary = ev.summary || "(utan titel)";
-          const badge = renderIconBadge(matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
+          const badge = renderKeywordBadge(matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
           return `
             <div class="fpc-month-event">
               <div class="fpc-month-event-dot" style="background:${ev.sourceColor}"></div>

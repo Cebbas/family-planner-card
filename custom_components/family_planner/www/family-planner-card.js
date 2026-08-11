@@ -742,6 +742,7 @@ class FamilyPlannerCard extends HTMLElement {
           background: var(--secondary-background-color, rgba(127,127,127,0.1));
         }
         .fpc-cd-chip.fpc-cd-pinned { border: 1px solid var(--primary-color); }
+        .fpc-cd-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
         .fpc-cd-days { font-size: 1.15em; font-weight: 600; color: var(--primary-color); }
         .fpc-cd-name { font-size: 0.78em; text-align: center; line-height: 1.15; }
         .fpc-cd-empty { color: var(--secondary-text-color); font-size: 0.85em; font-style: italic; }
@@ -857,23 +858,47 @@ class FamilyPlannerCard extends HTMLElement {
           background: none; border: 1px solid var(--divider-color); border-radius: 14px;
           padding: 4px 10px; font-size: 0.78em; color: var(--primary-text-color); cursor: pointer;
         }
-        .fpc-create-form { margin-top: 8px; padding: 10px; border-radius: 8px; background: var(--secondary-background-color, rgba(127,127,127,0.06)); }
-        .fpc-create-form input, .fpc-create-form select {
-          width: 100%; box-sizing: border-box; padding: 7px; margin-bottom: 6px;
-          border: 1px solid var(--divider-color); border-radius: 6px;
-          background: var(--card-background-color); color: var(--primary-text-color);
-        }
-        .fpc-create-form-actions { display: flex; gap: 8px; }
-        .fpc-create-form-actions button {
-          flex: 1; padding: 7px; border-radius: 6px; border: none; cursor: pointer;
-        }
-        .fpc-create-save { background: var(--primary-color); color: white; }
-        .fpc-create-cancel { background: none; border: 1px solid var(--divider-color) !important; }
         .fpc-add-event-btn {
           margin-top: 6px; background: none; border: 1px dashed var(--primary-color);
           color: var(--primary-color); border-radius: 6px; padding: 6px 10px;
           font-size: 0.82em; cursor: pointer; width: 100%;
         }
+        .fpc-create-dialog {
+          border: none; border-radius: 12px; padding: 0;
+          max-width: 380px; width: calc(100% - 40px);
+          background: var(--card-background-color, white); color: var(--primary-text-color);
+        }
+        .fpc-create-dialog::backdrop { background: rgba(0,0,0,0.5); }
+        .fpc-create-dialog-inner { padding: 16px; }
+        .fpc-create-dialog-title { font-weight: 500; font-size: 1.05em; margin-bottom: 12px; }
+        .fpc-create-field { margin-bottom: 10px; }
+        .fpc-create-field-label {
+          display: block; font-size: 0.8em; color: var(--secondary-text-color); margin-bottom: 3px;
+        }
+        .fpc-create-dialog input, .fpc-create-dialog select {
+          width: 100%; box-sizing: border-box; padding: 7px;
+          border: 1px solid var(--divider-color); border-radius: 6px;
+          background: var(--card-background-color); color: var(--primary-text-color);
+          font-size: 0.92em;
+        }
+        .fpc-create-row { display: flex; gap: 8px; }
+        .fpc-create-row .fpc-create-field { flex: 1; min-width: 0; }
+        .fpc-create-checkbox-row {
+          display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 0.92em;
+        }
+        .fpc-create-hint {
+          font-size: 0.76em; color: var(--secondary-text-color); margin: -4px 0 10px 0;
+        }
+        .fpc-create-error {
+          font-size: 0.82em; color: var(--error-color, #db4437); margin-bottom: 8px;
+        }
+        .fpc-create-form-actions { display: flex; gap: 8px; margin-top: 4px; }
+        .fpc-create-form-actions button {
+          flex: 1; padding: 8px; border-radius: 6px; border: none; cursor: pointer; font-size: 0.92em;
+        }
+        .fpc-create-save { background: var(--primary-color); color: white; }
+        .fpc-create-save:disabled { opacity: 0.5; cursor: default; }
+        .fpc-create-cancel { background: none; border: 1px solid var(--divider-color) !important; }
       </style>
     `;
 
@@ -917,6 +942,7 @@ class FamilyPlannerCard extends HTMLElement {
           <div class="fpc-month-daydetail" id="fpc-month-daydetail"></div>
         </div>
       </ha-card>
+      <dialog class="fpc-create-dialog" id="fpc-create-dialog"></dialog>
     `;
 
     this.shadowRoot.querySelector("#fpc-header").addEventListener("click", () => {
@@ -962,6 +988,16 @@ class FamilyPlannerCard extends HTMLElement {
     this.shadowRoot.querySelector("#fpc-share-btn").addEventListener("click", (ev) => {
       ev.stopPropagation();
       this._shareWeek();
+    });
+
+    // Engångslyssnare på själva <dialog>-elementet (inte dess innehåll,
+    // som byggs om vid varje fältändring i _renderCreateEventDialogContent)
+    // - fångar stängning via Esc-tangenten. _render() skapar ett helt nytt
+    // <dialog>-element varje gång den körs, så ingen risk att lyssnare
+    // staplas här som med document-pointerup ovan.
+    this.shadowRoot.querySelector("#fpc-create-dialog").addEventListener("cancel", () => {
+      this._creatingEvent = null;
+      this._creatingEventError = false;
     });
 
     // Global pointerup fångar drag-avslut även om man släpper utanför en cell.
@@ -1095,7 +1131,8 @@ class FamilyPlannerCard extends HTMLElement {
           // state och lägger själva datumet i ett attribut istället.
           const dateVal = st ? (it.date_attribute ? st.attributes[it.date_attribute] : st.state) : undefined;
           const days = dateVal !== undefined ? daysUntil(dateVal) : null;
-          return { ...it, days };
+          const picture = st && st.attributes.entity_picture ? st.attributes.entity_picture : null;
+          return { ...it, days, picture };
         })
         .filter((it) => it.days !== null);
 
@@ -1114,6 +1151,7 @@ class FamilyPlannerCard extends HTMLElement {
           .map(
             (it) => `
               <div class="fpc-cd-chip${it.pinned ? " fpc-cd-pinned" : ""}">
+                ${it.picture ? `<img class="fpc-cd-avatar" src="${it.picture}" alt="" />` : ""}
                 <div class="fpc-cd-days">${daysLabel(it.days)}</div>
                 <div class="fpc-cd-name">${fpcEsc(it.name || it.entity)}</div>
               </div>
@@ -1356,7 +1394,7 @@ class FamilyPlannerCard extends HTMLElement {
     if (this._dragMoved && start && end) {
       const startIso = start < end ? start : end;
       const endIso = start < end ? end : start;
-      this._creatingEvent = { startIso, endIso };
+      this._creatingEvent = this._newCreatingEvent(startIso, endIso);
       this._selectedDate = null;
     } else if (start) {
       this._selectedDate = this._selectedDate === start ? null : start;
@@ -1367,29 +1405,94 @@ class FamilyPlannerCard extends HTMLElement {
     this._updateMonthCalendar();
   }
 
-  async _saveNewEvent(targetEntity, summary, startIso, endIso) {
-    if (!this._hass || !targetEntity || !summary) return;
-    const endExclusive = (() => {
-      const d = new Date(endIso);
-      d.setDate(d.getDate() + 1);
-      return isoDate(d);
-    })();
-    try {
-      await this._hass.callService(
-        "calendar",
-        "create_event",
-        { summary, start_date: startIso, end_date: endExclusive },
-        { entity_id: targetEntity }
-      );
-      this._monthEventsCache = null;
-      this._weekEventsCache = null;
-      this._creatingEvent = null;
-      await this._maybeFetchMonthEvents();
-      await this._maybeFetchWeekEvents();
-      this._update();
-    } catch (err) {
-      // Går inte att skapa (t.ex. skrivskyddad kalender) - lämna formuläret öppet
+  // Startvärden för "ny händelse"-dialogen - samma vare sig man startar
+  // från ett drag i rutnätet eller "+ Lägg till händelse"-knappen.
+  _newCreatingEvent(startIso, endIso) {
+    const sources = this._calendarSources();
+    return {
+      startIso,
+      endIso,
+      summary: "",
+      targetEntity: sources[0] ? sources[0].calendar_entity : "",
+      allDay: true,
+      startTime: "18:00",
+      endTime: "19:00",
+      repeat: "never",
+      repeatCount: 4,
+    };
+  }
+
+  // Bygger en eller flera konkreta tillfällen (start/slut) från
+  // dialogens formulärdata - en per upprepning. OBS: detta skapar N
+  // fristående händelser via calendar.create_event, inte en riktig
+  // återkommande serie - HA:s create_event-tjänst saknar helt stöd för
+  // recurrence/rrule (kontrollerat mot services.yaml i home-assistant/
+  // core). Måste tas bort var för sig om planerna ändras senare.
+  _buildEventOccurrences(ce) {
+    const count = ce.repeat === "never" ? 1 : Math.max(2, Number(ce.repeatCount) || 2);
+    const stepDays = { never: 0, weekly: 7, biweekly: 14, monthly: 0 }[ce.repeat] || 0;
+    const occurrences = [];
+    for (let i = 0; i < count; i++) {
+      const s = new Date(ce.startIso);
+      const e = new Date(ce.endIso);
+      if (ce.repeat === "monthly") {
+        s.setMonth(s.getMonth() + i);
+        e.setMonth(e.getMonth() + i);
+      } else if (stepDays) {
+        s.setDate(s.getDate() + i * stepDays);
+        e.setDate(e.getDate() + i * stepDays);
+      }
+      if (ce.allDay) {
+        const endExclusive = new Date(e);
+        endExclusive.setDate(endExclusive.getDate() + 1);
+        occurrences.push({ start_date: isoDate(s), end_date: isoDate(endExclusive) });
+      } else {
+        occurrences.push({
+          start_date_time: `${isoDate(s)} ${ce.startTime}:00`,
+          end_date_time: `${isoDate(s)} ${ce.endTime}:00`,
+        });
+      }
     }
+    return occurrences;
+  }
+
+  async _saveCreatingEvent() {
+    const ce = this._creatingEvent;
+    if (!this._hass || !ce || !ce.targetEntity || !ce.summary || !ce.summary.trim()) return;
+    this._creatingEventSaving = true;
+    this._creatingEventError = false;
+    this._syncCreateEventDialog();
+
+    const occurrences = this._buildEventOccurrences(ce);
+    let anyFailed = false;
+    for (const occ of occurrences) {
+      try {
+        await this._hass.callService(
+          "calendar",
+          "create_event",
+          { summary: ce.summary.trim(), ...occ },
+          { entity_id: ce.targetEntity }
+        );
+      } catch (err) {
+        anyFailed = true;
+      }
+    }
+
+    this._creatingEventSaving = false;
+    if (anyFailed) {
+      // Går inte att skapa (t.ex. skrivskyddad kalender) - lämna dialogen
+      // öppen så man ser felet och kan försöka igen eller avbryta.
+      this._creatingEventError = true;
+      this._syncCreateEventDialog();
+      return;
+    }
+
+    this._monthEventsCache = null;
+    this._weekEventsCache = null;
+    this._creatingEvent = null;
+    await this._maybeFetchMonthEvents();
+    await this._maybeFetchWeekEvents();
+    this._update();
   }
 
   _updateMonthCalendar() {
@@ -1518,6 +1621,7 @@ class FamilyPlannerCard extends HTMLElement {
     });
 
     this._renderMonthDayDetail();
+    this._syncCreateEventDialog();
   }
 
   // Samlar alla synliga källors händelser för en veckorad, klippta till
@@ -1614,39 +1718,6 @@ class FamilyPlannerCard extends HTMLElement {
     if (!detailEl) return;
     const sources = this._calendarSources();
 
-    if (this._creatingEvent) {
-      const { startIso, endIso } = this._creatingEvent;
-      const label =
-        startIso === endIso
-          ? new Date(startIso).toLocaleDateString("sv-SE", { day: "numeric", month: "long" })
-          : `${new Date(startIso).toLocaleDateString("sv-SE", { day: "numeric", month: "short" })} – ${new Date(endIso).toLocaleDateString("sv-SE", { day: "numeric", month: "long" })}`;
-      detailEl.innerHTML = `
-        <div class="fpc-create-form">
-          <div class="fpc-month-daydetail-title">Ny händelse: ${label}</div>
-          <input type="text" id="fpc-new-event-title" placeholder="Titel, t.ex. Fotbollsträning" />
-          <select id="fpc-new-event-target">
-            ${sources.map((src) => `<option value="${fpcEsc(src.calendar_entity)}">${fpcEsc(src.name)}</option>`).join("")}
-          </select>
-          <div class="fpc-create-form-actions">
-            <button class="fpc-create-cancel" id="fpc-create-cancel">Avbryt</button>
-            <button class="fpc-create-save" id="fpc-create-save">Spara</button>
-          </div>
-        </div>
-      `;
-      detailEl.querySelector("#fpc-create-cancel").addEventListener("click", () => {
-        this._creatingEvent = null;
-        this._updateMonthCalendar();
-      });
-      detailEl.querySelector("#fpc-create-save").addEventListener("click", () => {
-        const title = detailEl.querySelector("#fpc-new-event-title").value.trim();
-        const target = detailEl.querySelector("#fpc-new-event-target").value;
-        if (title && target) {
-          this._saveNewEvent(target, title, startIso, endIso);
-        }
-      });
-      return;
-    }
-
     if (!this._selectedDate) {
       detailEl.innerHTML = "";
       return;
@@ -1683,10 +1754,176 @@ class FamilyPlannerCard extends HTMLElement {
     const addBtn = detailEl.querySelector("#fpc-add-event-btn");
     if (addBtn) {
       addBtn.addEventListener("click", () => {
-        this._creatingEvent = { startIso: this._selectedDate, endIso: this._selectedDate };
+        this._creatingEvent = this._newCreatingEvent(this._selectedDate, this._selectedDate);
         this._updateMonthCalendar();
       });
     }
+  }
+
+  // Öppnar/stänger/uppdaterar popup-dialogen för att skapa en ny
+  // händelse utifrån this._creatingEvent. Anropas efter varje
+  // _updateMonthCalendar() så dialogen alltid speglar aktuellt state,
+  // oavsett vad som satte/nollställde _creatingEvent.
+  _syncCreateEventDialog() {
+    const dialog = this.shadowRoot.querySelector("#fpc-create-dialog");
+    if (!dialog) return;
+    if (!this._creatingEvent) {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+      dialog.innerHTML = "";
+      return;
+    }
+    this._renderCreateEventDialogContent(dialog);
+    if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal();
+  }
+
+  _renderCreateEventDialogContent(dialog) {
+    const ce = this._creatingEvent;
+    const sources = this._calendarSources();
+
+    dialog.innerHTML = `
+      <div class="fpc-create-dialog-inner">
+        <div class="fpc-create-dialog-title">Ny händelse</div>
+        ${this._creatingEventError ? `<div class="fpc-create-error">Kunde inte spara - kontrollera att kalendern går att skriva till.</div>` : ""}
+        <div class="fpc-create-field">
+          <label class="fpc-create-field-label">Titel</label>
+          <input type="text" id="fpc-ce-title" placeholder="T.ex. Fotbollsträning" value="${fpcEsc(ce.summary)}" />
+        </div>
+        <div class="fpc-create-field">
+          <label class="fpc-create-field-label">Kalender</label>
+          <select id="fpc-ce-target">
+            ${sources
+              .map(
+                (src) =>
+                  `<option value="${fpcEsc(src.calendar_entity)}"${src.calendar_entity === ce.targetEntity ? " selected" : ""}>${fpcEsc(src.name)}</option>`
+              )
+              .join("")}
+          </select>
+        </div>
+        <div class="fpc-create-checkbox-row">
+          <input type="checkbox" id="fpc-ce-allday" ${ce.allDay ? "checked" : ""} />
+          <label for="fpc-ce-allday">Heldag</label>
+        </div>
+        ${
+          ce.allDay
+            ? `
+          <div class="fpc-create-row">
+            <div class="fpc-create-field">
+              <label class="fpc-create-field-label">Startdatum</label>
+              <input type="date" id="fpc-ce-start-date" value="${ce.startIso}" />
+            </div>
+            <div class="fpc-create-field">
+              <label class="fpc-create-field-label">Slutdatum</label>
+              <input type="date" id="fpc-ce-end-date" value="${ce.endIso}" />
+            </div>
+          </div>
+        `
+            : `
+          <div class="fpc-create-field">
+            <label class="fpc-create-field-label">Datum</label>
+            <input type="date" id="fpc-ce-start-date" value="${ce.startIso}" />
+          </div>
+          <div class="fpc-create-row">
+            <div class="fpc-create-field">
+              <label class="fpc-create-field-label">Starttid</label>
+              <input type="time" id="fpc-ce-start-time" value="${ce.startTime}" />
+            </div>
+            <div class="fpc-create-field">
+              <label class="fpc-create-field-label">Sluttid</label>
+              <input type="time" id="fpc-ce-end-time" value="${ce.endTime}" />
+            </div>
+          </div>
+        `
+        }
+        <div class="fpc-create-field">
+          <label class="fpc-create-field-label">Upprepning</label>
+          <select id="fpc-ce-repeat">
+            <option value="never"${ce.repeat === "never" ? " selected" : ""}>Aldrig</option>
+            <option value="weekly"${ce.repeat === "weekly" ? " selected" : ""}>Varje vecka</option>
+            <option value="biweekly"${ce.repeat === "biweekly" ? " selected" : ""}>Varannan vecka</option>
+            <option value="monthly"${ce.repeat === "monthly" ? " selected" : ""}>Varje månad</option>
+          </select>
+        </div>
+        ${
+          ce.repeat !== "never"
+            ? `
+          <div class="fpc-create-field">
+            <label class="fpc-create-field-label">Antal tillfällen</label>
+            <input type="number" id="fpc-ce-repeat-count" min="2" max="52" value="${ce.repeatCount}" />
+          </div>
+          <div class="fpc-create-hint">
+            Skapar ${ce.repeatCount} separata händelser - inte en riktig
+            återkommande serie. De måste tas bort var för sig om planerna ändras.
+          </div>
+        `
+            : ""
+        }
+        <div class="fpc-create-form-actions">
+          <button type="button" class="fpc-create-cancel" id="fpc-ce-cancel">Avbryt</button>
+          <button type="button" class="fpc-create-save" id="fpc-ce-save" ${this._creatingEventSaving ? "disabled" : ""}>
+            ${this._creatingEventSaving ? "Sparar…" : "Spara"}
+          </button>
+        </div>
+      </div>
+    `;
+
+    dialog.querySelector("#fpc-ce-title").addEventListener("change", (ev) => {
+      this._creatingEvent.summary = ev.target.value;
+    });
+    dialog.querySelector("#fpc-ce-target").addEventListener("change", (ev) => {
+      this._creatingEvent.targetEntity = ev.target.value;
+    });
+    dialog.querySelector("#fpc-ce-allday").addEventListener("change", (ev) => {
+      this._creatingEvent.allDay = ev.target.checked;
+      this._syncCreateEventDialog();
+    });
+    dialog.querySelector("#fpc-ce-start-date").addEventListener("change", (ev) => {
+      const val = ev.target.value;
+      if (!val) return;
+      // Byter man startdatum för en enda-dags-händelse (eller en tidsatt
+      // händelse, som bara har ett datumfält) följer slutdatumet med,
+      // annars kan slutdatumet av misstag hamna före startdatumet.
+      const wasSingleDay = this._creatingEvent.startIso === this._creatingEvent.endIso;
+      this._creatingEvent.startIso = val;
+      if (wasSingleDay || !this._creatingEvent.allDay) {
+        this._creatingEvent.endIso = val;
+      }
+    });
+    const endDateInput = dialog.querySelector("#fpc-ce-end-date");
+    if (endDateInput) {
+      endDateInput.addEventListener("change", (ev) => {
+        if (ev.target.value) this._creatingEvent.endIso = ev.target.value;
+      });
+    }
+    const startTimeInput = dialog.querySelector("#fpc-ce-start-time");
+    if (startTimeInput) {
+      startTimeInput.addEventListener("change", (ev) => {
+        this._creatingEvent.startTime = ev.target.value;
+      });
+    }
+    const endTimeInput = dialog.querySelector("#fpc-ce-end-time");
+    if (endTimeInput) {
+      endTimeInput.addEventListener("change", (ev) => {
+        this._creatingEvent.endTime = ev.target.value;
+      });
+    }
+    dialog.querySelector("#fpc-ce-repeat").addEventListener("change", (ev) => {
+      this._creatingEvent.repeat = ev.target.value;
+      this._syncCreateEventDialog();
+    });
+    const repeatCountInput = dialog.querySelector("#fpc-ce-repeat-count");
+    if (repeatCountInput) {
+      repeatCountInput.addEventListener("change", (ev) => {
+        this._creatingEvent.repeatCount = Math.max(2, Number(ev.target.value) || 2);
+      });
+    }
+    dialog.querySelector("#fpc-ce-cancel").addEventListener("click", () => {
+      this._creatingEvent = null;
+      this._creatingEventError = false;
+      this._updateMonthCalendar();
+    });
+    dialog.querySelector("#fpc-ce-save").addEventListener("click", () => {
+      this._saveCreatingEvent();
+    });
   }
 
   static getStubConfig() {

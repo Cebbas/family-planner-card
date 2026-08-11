@@ -889,12 +889,25 @@ class FamilyPlannerCard extends HTMLElement {
           font-size: 1.3em; cursor: pointer; padding: 4px 10px; line-height: 1;
         }
         .fpc-month-grid { display: flex; flex-direction: column; }
-        .fpc-month-weekday-row { display: flex; }
+        .fpc-month-weekday-row { display: flex; align-items: flex-end; }
+        .fpc-month-weekday-cells { display: flex; flex: 1 1 0; min-width: 0; }
         .fpc-month-weekday {
           flex: 1 1 0; min-width: 0; text-align: center; font-size: 0.72em;
           color: var(--secondary-text-color); padding-bottom: 4px;
         }
-        .fpc-month-week { position: relative; display: flex; margin-bottom: 3px; }
+        /* Fast bredd, samma på header-radens spacer och varje veckas
+           nummer-etikett, så de alltid hamnar i linje - måste ligga
+           UTANFÖR .fpc-month-week, annars räknar dess 7-kolumners
+           procent-baserade stapelpositioner (_monthEventBarsHtml) fel. */
+        .fpc-month-weeknum-spacer, .fpc-month-weeknum-label {
+          flex: 0 0 20px; width: 20px;
+        }
+        .fpc-month-weeknum-label {
+          display: flex; align-items: center; justify-content: center;
+          font-size: 0.68em; color: var(--secondary-text-color);
+        }
+        .fpc-month-week-row { display: flex; align-items: stretch; }
+        .fpc-month-week { position: relative; display: flex; flex: 1 1 0; min-width: 0; margin-bottom: 3px; }
         .fpc-month-cell {
           flex: 1 1 0; min-width: 0; position: relative; min-height: 46px;
           border-radius: 4px; padding: 4px;
@@ -1658,9 +1671,14 @@ class FamilyPlannerCard extends HTMLElement {
     const todayIso = isoDate(new Date());
     const gridEl = this.shadowRoot.querySelector("#fpc-month-grid");
 
-    const weekdayHeaders = `<div class="fpc-month-weekday-row">${DAY_LABELS.map(
-      (l) => `<div class="fpc-month-weekday">${l}</div>`
-    ).join("")}</div>`;
+    const weekdayHeaders = `
+      <div class="fpc-month-weekday-row">
+        <div class="fpc-month-weeknum-spacer"></div>
+        <div class="fpc-month-weekday-cells">${DAY_LABELS.map(
+          (l) => `<div class="fpc-month-weekday">${l}</div>`
+        ).join("")}</div>
+      </div>
+    `;
 
     const dragMin = this._dragging && this._dragStart && this._dragEnd
       ? (this._dragStart < this._dragEnd ? this._dragStart : this._dragEnd)
@@ -1679,6 +1697,8 @@ class FamilyPlannerCard extends HTMLElement {
 
     let weeksHtml = "";
     for (let week = 0; week < 6; week++) {
+      const weekStartDate = new Date(gridStart);
+      weekStartDate.setDate(weekStartDate.getDate() + week * 7);
       const weekLaneCount = laneCountByWeek[week] || 0;
       const minHeight = Math.max(46, MONTH_LANES_TOP_OFFSET + weekLaneCount * MONTH_LANE_HEIGHT + 6);
       let cellsHtml = "";
@@ -1713,7 +1733,12 @@ class FamilyPlannerCard extends HTMLElement {
           </div>
         `;
       }
-      weeksHtml += `<div class="fpc-month-week">${cellsHtml}${eventBarsByWeek[week]}</div>`;
+      weeksHtml += `
+        <div class="fpc-month-week-row">
+          <div class="fpc-month-weeknum-label">${isoWeekNumber(weekStartDate)}</div>
+          <div class="fpc-month-week">${cellsHtml}${eventBarsByWeek[week]}</div>
+        </div>
+      `;
     }
 
     gridEl.innerHTML = weekdayHeaders + weeksHtml;

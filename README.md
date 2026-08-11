@@ -286,6 +286,11 @@ template:
           {{ events if events else '' }}
 ```
 
+Har sensorn ett `entity_picture`-attribut används den bilden som badge
+framför raden istället för att matcha texten mot ikon-nyckelord — bra för
+sensorer som redan har en relevant bild (t.ex. från en skol-app), utan
+att behöva bygga en ikon-nyckelordslista för samma sak.
+
 ## Hur veckoschemat fylls i
 
 Veckoschemat läser **samma `calendar_entity`** som månadskalendern — inga

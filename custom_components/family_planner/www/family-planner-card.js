@@ -649,12 +649,23 @@ class FamilyPlannerCard extends HTMLElement {
   // Text-rader för "Idag" - en rad per entitet i p.entities med ett
   // "riktigt" state. Om alla är tomma/okonfigurerade visas en enda
   // placeholder-rad istället för flera identiska "Inget planerat idag".
+  // Bär med sig entityId så badgen kan använda sensorns egen
+  // entity_picture (se _lineBadge) istället för bara ikon-nyckelord.
   _personTodayLines(p) {
     const ids = Array.isArray(p.entities) ? p.entities : [];
-    if (ids.length === 0) return ["Inget planerat idag"];
-    const texts = ids.map((eid) => this._friendlyState(eid));
-    const real = texts.filter((t) => t !== "Inget planerat idag");
-    return real.length > 0 ? real : ["Inget planerat idag"];
+    if (ids.length === 0) return [{ text: "Inget planerat idag", entityId: null }];
+    const lines = ids.map((eid) => ({ text: this._friendlyState(eid), entityId: eid }));
+    const real = lines.filter((l) => l.text !== "Inget planerat idag");
+    return real.length > 0 ? real : [{ text: "Inget planerat idag", entityId: null }];
+  }
+
+  // Badge för en Idag-rad - sensorns egen entity_picture om den har en,
+  // annars matchning mot ikon-nyckelord som tidigare.
+  _lineBadge(line, keywords) {
+    const st = this._stateObj(line.entityId);
+    const picture = st && st.attributes && st.attributes.entity_picture;
+    if (picture) return `<img class="fpc-kw-image" src="${picture}" alt="" />`;
+    return renderIconBadge(matchIcon(line.text, keywords));
   }
 
   _todayKey() {
@@ -1046,7 +1057,7 @@ class FamilyPlannerCard extends HTMLElement {
     if (!cfg.tts || !this._hass) return;
     const parts = cfg.persons.map((p) => {
       const { name } = this._personDisplay(p);
-      return `${name}: ${this._personTodayLines(p).join(", ")}`;
+      return `${name}: ${this._personTodayLines(p).map((l) => l.text).join(", ")}`;
     });
     const activeGeneral = cfg.general.filter((g) => {
       const st = this._stateObj(g.entity);
@@ -1221,9 +1232,9 @@ class FamilyPlannerCard extends HTMLElement {
             : `<ha-icon icon="${icon}"></ha-icon>`;
           const personIconKeywords = this._iconKeywordsFor(p);
           const lines = this._personTodayLines(p)
-            .map((text) => {
-              const badge = renderIconBadge(matchIcon(text, personIconKeywords));
-              return `<div class="fpc-person-state-line">${badge}${fpcEsc(text)}</div>`;
+            .map((line) => {
+              const badge = this._lineBadge(line, personIconKeywords);
+              return `<div class="fpc-person-state-line">${badge}${fpcEsc(line.text)}</div>`;
             })
             .join("");
           const away = this._isPersonAwayNow(p);

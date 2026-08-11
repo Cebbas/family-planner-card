@@ -195,7 +195,7 @@ const MONTH_LANES_TOP_OFFSET = 20; // plats för datumsiffran ovanför första l
 // (mer än två samtidiga borta-barn samma dag är ett extremfall som inte
 // är värt utrymmet det skulle kosta).
 const AWAY_LINE_HEIGHT = 4;
-const AWAY_LINES_TOP_OFFSET = 15;
+const AWAY_LINES_TOP_OFFSET = 19; // precis under datumsiffran, inte över den
 const AWAY_MAX_LANES = 2;
 
 // Tilldelar varje händelse (objekt med startCol/endCol, 0-6 inom en
@@ -1708,7 +1708,9 @@ class FamilyPlannerCard extends HTMLElement {
     const awaySources = sources.filter((s) => s.isAway);
     const barSources = sources.filter((s) => !s.isAway);
     const hasAwayCalendars = (cfg.away_calendars || []).length > 0;
-    const barsTopOffset = MONTH_LANES_TOP_OFFSET + (hasAwayCalendars ? AWAY_MAX_LANES * AWAY_LINE_HEIGHT + 2 : 0);
+    const barsTopOffset = hasAwayCalendars
+      ? Math.max(MONTH_LANES_TOP_OFFSET, AWAY_LINES_TOP_OFFSET + AWAY_MAX_LANES * AWAY_LINE_HEIGHT + 3)
+      : MONTH_LANES_TOP_OFFSET;
 
     // Beräknas för hela rutnätet innan cellerna byggs, eftersom varje
     // dagcell behöver veta sin egen "+N dolda"-räknare för badgen i

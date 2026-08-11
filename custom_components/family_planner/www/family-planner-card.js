@@ -638,6 +638,30 @@ class FamilyPlannerCard extends HTMLElement {
     return { name, picture };
   }
 
+  // Avatar-cirkeln (profilbild eller ikon på färgad bakgrund) - delas
+  // mellan Idag-vyn och veckoschemats radhuvud.
+  _personAvatarHtml(p) {
+    const color = p.color || "var(--primary-color)";
+    const icon = p.icon || "mdi:account";
+    const { picture } = this._personDisplay(p);
+    const inner = picture
+      ? `<img class="fpc-avatar-img" src="${picture}" alt="" />`
+      : `<ha-icon icon="${icon}"></ha-icon>`;
+    return `<div class="fpc-avatar" style="background:${picture ? "transparent" : color}">${inner}</div>`;
+  }
+
+  // Avatar ovanför namn, som en liten vertikal identitets-block - samma
+  // markup i Idag-vyns personrader och veckoschemats radhuvud, se ovan.
+  _personIdentityHtml(p) {
+    const { name } = this._personDisplay(p);
+    return `
+      <div class="fpc-person-identity">
+        ${this._personAvatarHtml(p)}
+        <div class="fpc-person-name">${fpcEsc(name)}</div>
+      </div>
+    `;
+  }
+
   // Person-specifika ikon-nyckelord vinner över globala (matchIcon tar
   // första träffen), så samma ord kan ge olika bild/ikon per person.
   _iconKeywordsFor(p) {
@@ -710,6 +734,10 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-person-row:last-child { border-bottom: none; }
         .fpc-person-away { opacity: 0.45; filter: grayscale(1); }
         .fpc-person-returning { font-size: 0.8em; color: var(--primary-color); margin-bottom: 2px; }
+        .fpc-person-identity {
+          display: flex; flex-direction: column; align-items: center;
+          gap: 4px; flex-shrink: 0;
+        }
         .fpc-avatar {
           width: 36px; height: 36px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
@@ -717,7 +745,10 @@ class FamilyPlannerCard extends HTMLElement {
         }
         .fpc-avatar-img { width: 100%; height: 100%; object-fit: cover; }
         .fpc-person-info { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
-        .fpc-person-name { font-weight: 500; font-size: 0.95em; }
+        .fpc-person-name {
+          font-weight: 500; font-size: 0.78em; text-align: center;
+          max-width: 56px; overflow: hidden; text-overflow: ellipsis;
+        }
         .fpc-person-state-line {
           color: var(--secondary-text-color); font-size: 0.88em;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1234,12 +1265,6 @@ class FamilyPlannerCard extends HTMLElement {
     } else if (personsEl) {
       personsEl.innerHTML = cfg.persons
         .map((p) => {
-          const color = p.color || "var(--primary-color)";
-          const icon = p.icon || "mdi:account";
-          const { name, picture } = this._personDisplay(p);
-          const avatarInner = picture
-            ? `<img class="fpc-avatar-img" src="${picture}" alt="" />`
-            : `<ha-icon icon="${icon}"></ha-icon>`;
           const personIconKeywords = this._iconKeywordsFor(p);
           const lines = this._personTodayLines(p)
             .map((line) => this._renderTodayLine(line, personIconKeywords))
@@ -1253,11 +1278,8 @@ class FamilyPlannerCard extends HTMLElement {
             : "";
           return `
             <div class="fpc-person-row${away ? " fpc-person-away" : ""}">
-              <div class="fpc-avatar" style="background:${picture ? "transparent" : color}">
-                ${avatarInner}
-              </div>
+              ${this._personIdentityHtml(p)}
               <div class="fpc-person-info">
-                <div class="fpc-person-name">${fpcEsc(name)}</div>
                 ${returningLine}
                 ${lines}
               </div>
@@ -1360,7 +1382,6 @@ class FamilyPlannerCard extends HTMLElement {
 
       const rows = cfg.persons
         .map((p, idx) => {
-          const { name } = this._personDisplay(p);
           const personSrcs = sources.filter((s) => s.personIdxs.includes(idx));
           const cells = weekDates
             .map((dateIso, i) => {
@@ -1374,7 +1395,7 @@ class FamilyPlannerCard extends HTMLElement {
               return renderWeekCell(finalEvents, i === todayIdx);
             })
             .join("");
-          return `<tr><td class="fpc-person-col">${fpcEsc(name)}</td>${cells}</tr>`;
+          return `<tr><td class="fpc-person-col">${this._personIdentityHtml(p)}</td>${cells}</tr>`;
         })
         .join("");
 

@@ -783,7 +783,7 @@ class FamilyPlannerCard extends HTMLElement {
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .fpc-person-state-picture { margin-top: 2px; }
-        .fpc-state-picture { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+        .fpc-state-picture { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
         .fpc-general-row {
           display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
           padding-top: 14px; margin-top: 4px;

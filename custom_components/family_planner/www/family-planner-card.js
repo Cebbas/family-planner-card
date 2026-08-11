@@ -464,11 +464,12 @@ class FamilyPlannerCard extends HTMLElement {
   // Vilka av personens borta-kalendrar som har sin sista dag på dateIso -
   // dvs kommer de hem just den dagen från just de kalendrarna (sista
   // dagen av händelsen räknas som återkomstdagen, inte dagen efter).
-  // Returnerar hela borta-kalender-posterna (inte bara true/false) så att
-  // "Kommer hem"-markeringen kan namnge vilken förälder/kalender det
-  // gäller, t.ex. "Kommer hem (Hos mamma)". Tar en explicit cache
-  // (Idag-vyn använder _awayEventsCache, veckoschemat _weekEventsCache)
-  // eftersom de täcker olika datumfönster.
+  // Returnerar hela borta-kalender-posterna (inte bara true/false) - inte
+  // för att namnge dem i "Kommer hem"-texten (den är medvetet generisk,
+  // den faktiska kalenderns egen händelsetext syns redan bredvid), utan
+  // så anropande kod kan avgöra *om* det är en återkomstdag. Tar en
+  // explicit cache (Idag-vyn använder _awayEventsCache, veckoschemat
+  // _weekEventsCache) eftersom de täcker olika datumfönster.
   _returningAwayCalendarsOn(p, dateIso, cache) {
     const cfg = this._config;
     if (!cache) return [];
@@ -1302,9 +1303,7 @@ class FamilyPlannerCard extends HTMLElement {
           // "borta"-toningen och "kommer hem idag" kan gälla samma dag.
           const returningToday = this._returningAwayCalendarsOn(p, isoDate(new Date()), this._awayEventsCache);
           const returningLine = returningToday.length > 0
-            ? `<div class="fpc-person-returning">🏠 Kommer hem idag (${returningToday
-                .map((a) => fpcEsc(a.name))
-                .join(", ")})</div>`
+            ? `<div class="fpc-person-returning">🏠 Kommer hem idag</div>`
             : "";
           return `
             <div class="fpc-person-row${away ? " fpc-person-away" : ""}">
@@ -1417,17 +1416,12 @@ class FamilyPlannerCard extends HTMLElement {
             .map((dateIso, i) => {
               const events = this._weekDayEvents(personSrcs, dateIso);
               // "Kommer hem"-markering läggs på som en syntetisk händelse
-              // längst fram på borta-händelsens sista dag, namngiven efter
-              // kalendern (t.ex. "Hos mamma") - se _returningAwayCalendarsOn.
+              // längst fram på borta-händelsens sista dag, se
+              // _returningAwayCalendarsOn. Den faktiska borta-händelsens
+              // egen text (t.ex. "Hos mamma") finns redan med i events.
               const returning = this._returningAwayCalendarsOn(p, dateIso, this._weekEventsCache);
               const finalEvents = returning.length > 0
-                ? [
-                    {
-                      summary: `🏠 Kommer hem (${returning.map((a) => a.name).join(", ")})`,
-                      sourceIconKeywords: [],
-                    },
-                    ...events,
-                  ]
+                ? [{ summary: "🏠 Kommer hem", sourceIconKeywords: [] }, ...events]
                 : events;
               return renderWeekCell(finalEvents, i === todayIdx);
             })

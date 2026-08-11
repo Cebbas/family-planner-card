@@ -124,6 +124,14 @@ function startOfCalendarGrid(year, month) {
   return new Date(year, month, 1 - dow);
 }
 
+// Lägger till (eller drar ifrån) ett antal dagar på ett "YYYY-MM-DD"-datum,
+// via lokal Date-konstruktor (år/månad/dag) istället för att parsa strängen
+// direkt - undviker UTC/lokal-tidszon-fällan med new Date("YYYY-MM-DD").
+function addDaysIso(dateIso, delta) {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  return isoDate(new Date(y, m - 1, d + delta));
+}
+
 // Datumintervall [start, end] (båda inklusive, "YYYY-MM-DD") som en
 // kalenderhändelse täcker. Heldagshändelsers slutdatum är exklusivt
 // enligt iCal-spec (en helg fre-sön har end.date = måndagen), så det
@@ -436,6 +444,26 @@ class FamilyPlannerCard extends HTMLElement {
       .some((a) => (cache.data[a.entity] || []).some((ev) => eventCoversNow(ev)));
   }
 
+  // Är dateIso dagen efter personens senaste "borta"-dag i någon av deras
+  // borta-kalendrar - dvs kommer de hem just den dagen. Tar en explicit
+  // cache (Idag-vyn använder _awayEventsCache, veckoschemat _weekEventsCache)
+  // eftersom de täcker olika datumfönster.
+  _isPersonReturningOn(p, dateIso, cache) {
+    const cfg = this._config;
+    if (!cache) return false;
+    const key = personMatchKey(p);
+    if (!key) return false;
+    const yesterday = addDaysIso(dateIso, -1);
+    return (cfg.away_calendars || [])
+      .filter((a) => (a.persons || []).includes(key))
+      .some((a) =>
+        (cache.data[a.entity] || []).some((ev) => {
+          const range = eventDateRange(ev);
+          return !!range && range.end === yesterday;
+        })
+      );
+  }
+
   // Alla kalenderkällor - personers egna calendar_entity, "borta hos andra
   // föräldern"-kalendrar bundna till 1+ personer, och fristående "calendars"
   // som inte hör till någon person - i ett enhetligt format som veckoschema,
@@ -548,10 +576,15 @@ class FamilyPlannerCard extends HTMLElement {
 
     this._weekEventsLoading = true;
     try {
+      // En dags marginal på var sida - annars missas en "borta"-händelse
+      // som slutar söndagen precis före veckans start när vi ska avgöra
+      // att måndagen är en "kommer hem"-dag (se _isPersonReturningOn).
+      const start = new Date(monday);
+      start.setDate(start.getDate() - 1);
       const end = new Date(monday);
-      end.setDate(end.getDate() + 7);
+      end.setDate(end.getDate() + 8);
       const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
-      const data = await this._fetchCalendarEvents(entityIds, monday, end);
+      const data = await this._fetchCalendarEvents(entityIds, start, end);
       this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), data };
     } finally {
       this._weekEventsLoading = false;
@@ -673,6 +706,7 @@ class FamilyPlannerCard extends HTMLElement {
         }
         .fpc-person-row:last-child { border-bottom: none; }
         .fpc-person-away { opacity: 0.45; filter: grayscale(1); }
+        .fpc-person-returning { font-size: 0.8em; color: var(--primary-color); margin-bottom: 2px; }
         .fpc-avatar {
           width: 36px; height: 36px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
@@ -1206,6 +1240,10 @@ class FamilyPlannerCard extends HTMLElement {
             })
             .join("");
           const away = this._isPersonAwayNow(p);
+          const returningToday = !away && this._isPersonReturningOn(p, isoDate(new Date()), this._awayEventsCache);
+          const returningLine = returningToday
+            ? `<div class="fpc-person-returning">🏠 Kommer hem idag</div>`
+            : "";
           return `
             <div class="fpc-person-row${away ? " fpc-person-away" : ""}">
               <div class="fpc-avatar" style="background:${picture ? "transparent" : color}">
@@ -1213,6 +1251,7 @@ class FamilyPlannerCard extends HTMLElement {
               </div>
               <div class="fpc-person-info">
                 <div class="fpc-person-name">${fpcEsc(name)}</div>
+                ${returningLine}
                 ${lines}
               </div>
             </div>
@@ -1319,7 +1358,15 @@ class FamilyPlannerCard extends HTMLElement {
           const cells = weekDates
             .map((dateIso, i) => {
               const events = this._weekDayEvents(personSrcs, dateIso);
-              return renderWeekCell(events, i === todayIdx);
+              // "Kommer hem"-markering läggs på som en syntetisk händelse
+              // längst fram den dag borta-perioden tar slut, se
+              // _isPersonReturningOn (kräver den utökade fetch-marginalen
+              // i _maybeFetchWeekEvents för att fånga gränsfall mån/sön).
+              const returning = this._isPersonReturningOn(p, dateIso, this._weekEventsCache);
+              const finalEvents = returning
+                ? [{ summary: "🏠 Kommer hem", sourceIconKeywords: [] }, ...events]
+                : events;
+              return renderWeekCell(finalEvents, i === todayIdx);
             })
             .join("");
           return `<tr><td class="fpc-person-col">${fpcEsc(name)}</td>${cells}</tr>`;
@@ -1422,38 +1469,42 @@ class FamilyPlannerCard extends HTMLElement {
     };
   }
 
-  // Bygger en eller flera konkreta tillfällen (start/slut) från
-  // dialogens formulärdata - en per upprepning. OBS: detta skapar N
-  // fristående händelser via calendar.create_event, inte en riktig
-  // återkommande serie - HA:s create_event-tjänst saknar helt stöd för
-  // recurrence/rrule (kontrollerat mot services.yaml i home-assistant/
-  // core). Måste tas bort var för sig om planerna ändras senare.
-  _buildEventOccurrences(ce) {
-    const count = ce.repeat === "never" ? 1 : Math.max(2, Number(ce.repeatCount) || 2);
-    const stepDays = { never: 0, weekly: 7, biweekly: 14, monthly: 0 }[ce.repeat] || 0;
-    const occurrences = [];
-    for (let i = 0; i < count; i++) {
-      const s = new Date(ce.startIso);
-      const e = new Date(ce.endIso);
-      if (ce.repeat === "monthly") {
-        s.setMonth(s.getMonth() + i);
-        e.setMonth(e.getMonth() + i);
-      } else if (stepDays) {
-        s.setDate(s.getDate() + i * stepDays);
-        e.setDate(e.getDate() + i * stepDays);
-      }
-      if (ce.allDay) {
-        const endExclusive = new Date(e);
-        endExclusive.setDate(endExclusive.getDate() + 1);
-        occurrences.push({ start_date: isoDate(s), end_date: isoDate(endExclusive) });
-      } else {
-        occurrences.push({
-          start_date_time: `${isoDate(s)} ${ce.startTime}:00`,
-          end_date_time: `${isoDate(s)} ${ce.endTime}:00`,
-        });
-      }
+  // FREQ=WEEKLY/MONTHLY;INTERVAL=n;COUNT=n - ett riktigt RFC5545-rrule.
+  // Skickas till calendar/event/create (se _buildEventPayload), inte till
+  // calendar.create_event-tjänsten, som helt saknar ett rrule-fält i sitt
+  // valideringsschema (kontrollerat mot home-assistant/core:s källkod -
+  // homeassistant/components/calendar/__init__.py, CREATE_EVENT_SCHEMA).
+  // Websocket-kommandot calendar/event/create tar däremot ett rrule via
+  // WEBSOCKET_EVENT_SCHEMA, och både CalDAV- och den inbyggda
+  // local_calendar-integrationen skickar det vidare till kalendern -
+  // andra integrationers stöd kan variera.
+  _buildRRule(repeat, count) {
+    const freq = repeat === "monthly" ? "MONTHLY" : "WEEKLY";
+    const interval = repeat === "biweekly" ? ";INTERVAL=2" : "";
+    const safeCount = Math.max(2, Number(count) || 2);
+    return `FREQ=${freq}${interval};COUNT=${safeCount}`;
+  }
+
+  // Bygger event-objektet för calendar/event/create utifrån dialogens
+  // formulärdata. dtstart/dtend skickas som "floating" lokal tid (ingen
+  // tidszon-offset) - HA:s dt_util.as_local() tolkar en tidszonslös
+  // datetime som redan uttryckt i instansens lokala tidszon, så klockslag
+  // hamnar rätt utan omräkning.
+  _buildEventPayload(ce) {
+    const event = { summary: ce.summary.trim() };
+    if (ce.allDay) {
+      const endExclusive = new Date(ce.endIso);
+      endExclusive.setDate(endExclusive.getDate() + 1);
+      event.dtstart = ce.startIso;
+      event.dtend = isoDate(endExclusive);
+    } else {
+      event.dtstart = `${ce.startIso}T${ce.startTime}:00`;
+      event.dtend = `${ce.startIso}T${ce.endTime}:00`;
     }
-    return occurrences;
+    if (ce.repeat !== "never") {
+      event.rrule = this._buildRRule(ce.repeat, ce.repeatCount);
+    }
+    return event;
   }
 
   async _saveCreatingEvent() {
@@ -1463,30 +1514,23 @@ class FamilyPlannerCard extends HTMLElement {
     this._creatingEventError = false;
     this._syncCreateEventDialog();
 
-    const occurrences = this._buildEventOccurrences(ce);
-    let anyFailed = false;
-    for (const occ of occurrences) {
-      try {
-        await this._hass.callService(
-          "calendar",
-          "create_event",
-          { summary: ce.summary.trim(), ...occ },
-          { entity_id: ce.targetEntity }
-        );
-      } catch (err) {
-        anyFailed = true;
-      }
-    }
-
-    this._creatingEventSaving = false;
-    if (anyFailed) {
-      // Går inte att skapa (t.ex. skrivskyddad kalender) - lämna dialogen
-      // öppen så man ser felet och kan försöka igen eller avbryta.
+    try {
+      await this._hass.callWS({
+        type: "calendar/event/create",
+        entity_id: ce.targetEntity,
+        event: this._buildEventPayload(ce),
+      });
+    } catch (err) {
+      // Går inte att skapa (t.ex. skrivskyddad kalender, eller en
+      // integration som inte stödjer rrule) - lämna dialogen öppen så
+      // man ser felet och kan försöka igen eller avbryta.
+      this._creatingEventSaving = false;
       this._creatingEventError = true;
       this._syncCreateEventDialog();
       return;
     }
 
+    this._creatingEventSaving = false;
     this._monthEventsCache = null;
     this._weekEventsCache = null;
     this._creatingEvent = null;
@@ -1851,8 +1895,9 @@ class FamilyPlannerCard extends HTMLElement {
             <input type="number" id="fpc-ce-repeat-count" min="2" max="52" value="${ce.repeatCount}" />
           </div>
           <div class="fpc-create-hint">
-            Skapar ${ce.repeatCount} separata händelser - inte en riktig
-            återkommande serie. De måste tas bort var för sig om planerna ändras.
+            Skapas som en riktig återkommande serie (stöds av bl.a. CalDAV
+            och HA:s inbyggda lokala kalender) - vissa kalenderintegrationer
+            kan sakna stöd för upprepning, då visas ett felmeddelande vid sparande.
           </div>
         `
             : ""

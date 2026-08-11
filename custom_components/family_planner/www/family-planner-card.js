@@ -461,19 +461,22 @@ class FamilyPlannerCard extends HTMLElement {
       .some((a) => (cache.data[a.entity] || []).some((ev) => eventCoversNow(ev)));
   }
 
-  // Är dateIso den sista dagen av en "borta"-händelse hos någon av
-  // personens borta-kalendrar - dvs kommer de hem just den dagen (sista
-  // dagen av händelsen räknas som återkomstdagen, inte dagen efter). Tar
-  // en explicit cache (Idag-vyn använder _awayEventsCache, veckoschemat
-  // _weekEventsCache) eftersom de täcker olika datumfönster.
-  _isPersonReturningOn(p, dateIso, cache) {
+  // Vilka av personens borta-kalendrar som har sin sista dag på dateIso -
+  // dvs kommer de hem just den dagen från just de kalendrarna (sista
+  // dagen av händelsen räknas som återkomstdagen, inte dagen efter).
+  // Returnerar hela borta-kalender-posterna (inte bara true/false) så att
+  // "Kommer hem"-markeringen kan namnge vilken förälder/kalender det
+  // gäller, t.ex. "Kommer hem (Hos mamma)". Tar en explicit cache
+  // (Idag-vyn använder _awayEventsCache, veckoschemat _weekEventsCache)
+  // eftersom de täcker olika datumfönster.
+  _returningAwayCalendarsOn(p, dateIso, cache) {
     const cfg = this._config;
-    if (!cache) return false;
+    if (!cache) return [];
     const key = personMatchKey(p);
-    if (!key) return false;
+    if (!key) return [];
     return (cfg.away_calendars || [])
       .filter((a) => (a.persons || []).includes(key))
-      .some((a) =>
+      .filter((a) =>
         (cache.data[a.entity] || []).some((ev) => {
           const range = eventDateRange(ev);
           return !!range && range.end === dateIso;
@@ -1297,9 +1300,11 @@ class FamilyPlannerCard extends HTMLElement {
           const away = this._isPersonAwayNow(p);
           // Sista dagen av en borta-händelse räknas som ankomstdag, så
           // "borta"-toningen och "kommer hem idag" kan gälla samma dag.
-          const returningToday = this._isPersonReturningOn(p, isoDate(new Date()), this._awayEventsCache);
-          const returningLine = returningToday
-            ? `<div class="fpc-person-returning">🏠 Kommer hem idag</div>`
+          const returningToday = this._returningAwayCalendarsOn(p, isoDate(new Date()), this._awayEventsCache);
+          const returningLine = returningToday.length > 0
+            ? `<div class="fpc-person-returning">🏠 Kommer hem idag (${returningToday
+                .map((a) => fpcEsc(a.name))
+                .join(", ")})</div>`
             : "";
           return `
             <div class="fpc-person-row${away ? " fpc-person-away" : ""}">
@@ -1412,10 +1417,17 @@ class FamilyPlannerCard extends HTMLElement {
             .map((dateIso, i) => {
               const events = this._weekDayEvents(personSrcs, dateIso);
               // "Kommer hem"-markering läggs på som en syntetisk händelse
-              // längst fram på borta-händelsens sista dag, se _isPersonReturningOn.
-              const returning = this._isPersonReturningOn(p, dateIso, this._weekEventsCache);
-              const finalEvents = returning
-                ? [{ summary: "🏠 Kommer hem", sourceIconKeywords: [] }, ...events]
+              // längst fram på borta-händelsens sista dag, namngiven efter
+              // kalendern (t.ex. "Hos mamma") - se _returningAwayCalendarsOn.
+              const returning = this._returningAwayCalendarsOn(p, dateIso, this._weekEventsCache);
+              const finalEvents = returning.length > 0
+                ? [
+                    {
+                      summary: `🏠 Kommer hem (${returning.map((a) => a.name).join(", ")})`,
+                      sourceIconKeywords: [],
+                    },
+                    ...events,
+                  ]
                 : events;
               return renderWeekCell(finalEvents, i === todayIdx);
             })

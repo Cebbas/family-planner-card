@@ -189,6 +189,15 @@ const MONTH_MAX_VISIBLE_LANES = 3;
 const MONTH_LANE_HEIGHT = 15;
 const MONTH_LANES_TOP_OFFSET = 20; // plats för datumsiffran ovanför första lane
 
+// "Borta hos andra föräldern"-kalendrar ritas som tunna linjer strax
+// under datumsiffran istället för fullstora staplar bland de vanliga
+// aktiviteterna - egen, mindre lane-höjd, egen offset. Max 2 lanes
+// (mer än två samtidiga borta-barn samma dag är ett extremfall som inte
+// är värt utrymmet det skulle kosta).
+const AWAY_LINE_HEIGHT = 4;
+const AWAY_LINES_TOP_OFFSET = 15;
+const AWAY_MAX_LANES = 2;
+
 // Tilldelar varje händelse (objekt med startCol/endCol, 0-6 inom en
 // veckorad) en "lane" (rad) så att inga två händelser i samma lane
 // överlappar i kolumn - klassisk girig intervallschemaläggning, samma
@@ -946,6 +955,9 @@ class FamilyPlannerCard extends HTMLElement {
           position: absolute; right: 3px; bottom: 2px; font-size: 0.62em;
           color: var(--secondary-text-color); font-weight: 600;
         }
+        .fpc-month-away-line {
+          position: absolute; height: 3px; border-radius: 2px; pointer-events: none;
+        }
         .fpc-month-cell.fpc-today-cell .fpc-month-overflow { color: white; opacity: 0.85; }
         .fpc-month-daydetail { margin-top: 12px; }
         .fpc-month-daydetail-title { font-weight: 500; margin-bottom: 6px; font-size: 0.92em; }
@@ -1687,20 +1699,36 @@ class FamilyPlannerCard extends HTMLElement {
       ? (this._dragStart < this._dragEnd ? this._dragEnd : this._dragStart)
       : null;
 
+    // "Borta hos andra föräldern" ritas separat som tunna linjer (se
+    // _monthAwayLinesHtml) istället för att blandas in bland de vanliga
+    // aktivitetsstaplarna - hålls därför utanför sources här. Reserverar
+    // fast utrymme åt dem ovanför de vanliga staplarna bara om det
+    // faktiskt finns borta-kalendrar konfigurerade, annars oförändrad
+    // MONTH_LANES_TOP_OFFSET.
+    const awaySources = sources.filter((s) => s.isAway);
+    const barSources = sources.filter((s) => !s.isAway);
+    const hasAwayCalendars = (cfg.away_calendars || []).length > 0;
+    const barsTopOffset = MONTH_LANES_TOP_OFFSET + (hasAwayCalendars ? AWAY_MAX_LANES * AWAY_LINE_HEIGHT + 2 : 0);
+
     // Beräknas för hela rutnätet innan cellerna byggs, eftersom varje
     // dagcell behöver veta sin egen "+N dolda"-räknare för badgen i
     // hörnet, och sin veckas lane-antal för att kunna sätta en
     // garanterat tillräcklig min-height (se MONTH_MAX_VISIBLE_LANES-
     // kommentaren - lita inte på att webbläsaren själv växer raden
     // utifrån en stapels top-offset).
-    const { weeks: eventBarsByWeek, overflowByDate, laneCountByWeek } = this._monthEventBarsHtml(gridStart, sources);
+    const { weeks: eventBarsByWeek, overflowByDate, laneCountByWeek } = this._monthEventBarsHtml(
+      gridStart,
+      barSources,
+      barsTopOffset
+    );
+    const { weeks: awayLinesByWeek } = this._monthAwayLinesHtml(gridStart, awaySources);
 
     let weeksHtml = "";
     for (let week = 0; week < 6; week++) {
       const weekStartDate = new Date(gridStart);
       weekStartDate.setDate(weekStartDate.getDate() + week * 7);
       const weekLaneCount = laneCountByWeek[week] || 0;
-      const minHeight = Math.max(46, MONTH_LANES_TOP_OFFSET + weekLaneCount * MONTH_LANE_HEIGHT + 6);
+      const minHeight = Math.max(46, barsTopOffset + weekLaneCount * MONTH_LANE_HEIGHT + 6);
       let cellsHtml = "";
       for (let col = 0; col < 7; col++) {
         const i = week * 7 + col;
@@ -1736,7 +1764,7 @@ class FamilyPlannerCard extends HTMLElement {
       weeksHtml += `
         <div class="fpc-month-week-row">
           <div class="fpc-month-weeknum-label">${isoWeekNumber(weekStartDate)}</div>
-          <div class="fpc-month-week">${cellsHtml}${eventBarsByWeek[week]}</div>
+          <div class="fpc-month-week">${cellsHtml}${awayLinesByWeek[week]}${eventBarsByWeek[week]}</div>
         </div>
       `;
     }
@@ -1814,7 +1842,7 @@ class FamilyPlannerCard extends HTMLElement {
   // vecka, i overflowByDate). Returnerar en HTML-sträng per veckorad
   // (weeks[0..5]), inte en enda platt sträng, eftersom staplarna nu
   // måste in i respektive veckas egen wrapper (för position:relative).
-  _monthEventBarsHtml(gridStart, sources) {
+  _monthEventBarsHtml(gridStart, sources, topOffset) {
     const weeks = [];
     const overflowByDate = {};
     const laneCountByWeek = [];
@@ -1842,7 +1870,7 @@ class FamilyPlannerCard extends HTMLElement {
           return;
         }
         const badge = renderKeywordBadge(matchIcon(ev.summary, ev.iconKeywords));
-        const top = MONTH_LANES_TOP_OFFSET + ev.lane * MONTH_LANE_HEIGHT;
+        const top = topOffset + ev.lane * MONTH_LANE_HEIGHT;
         const leftPct = (ev.startCol / 7) * 100;
         const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;
         weekHtml += `
@@ -1852,6 +1880,41 @@ class FamilyPlannerCard extends HTMLElement {
       weeks.push(weekHtml);
     }
     return { weeks, overflowByDate, laneCountByWeek };
+  }
+
+  // "Borta hos andra föräldern" som tunna linjer strax under datumsiffran
+  // istället för fullstora staplar bland de vanliga aktiviteterna -
+  // samma klipp-/lane-logik som _monthEventBarsHtml men egen, mindre
+  // skala (AWAY_LINE_HEIGHT/AWAY_LINES_TOP_OFFSET) och ingen text/badge
+  // (för smalt för att rymma något läsbart) - namnet syns i title-
+  // attributet vid hover, och i veckoschemat/dagsdetaljen som vanligt.
+  _monthAwayLinesHtml(gridStart, awaySources) {
+    const weeks = [];
+    for (let week = 0; week < 6; week++) {
+      const weekStart = new Date(gridStart);
+      weekStart.setDate(weekStart.getDate() + week * 7);
+      const weekDates = Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(weekStart);
+        d.setDate(d.getDate() + i);
+        return isoDate(d);
+      });
+
+      const weekEvents = this._weekEventsForLanes(weekDates, awaySources);
+      const { events: placed } = packEventLanes(weekEvents);
+
+      let weekHtml = "";
+      placed.forEach((ev) => {
+        if (ev.lane >= AWAY_MAX_LANES) return;
+        const top = AWAY_LINES_TOP_OFFSET + ev.lane * AWAY_LINE_HEIGHT;
+        const leftPct = (ev.startCol / 7) * 100;
+        const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;
+        weekHtml += `
+          <div class="fpc-month-away-line" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${ev.color};" title="${fpcEsc(ev.summary)}"></div>
+        `;
+      });
+      weeks.push(weekHtml);
+    }
+    return { weeks };
   }
 
   _renderMonthDayDetail() {

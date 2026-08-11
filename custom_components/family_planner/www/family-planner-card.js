@@ -124,14 +124,6 @@ function startOfCalendarGrid(year, month) {
   return new Date(year, month, 1 - dow);
 }
 
-// Lägger till (eller drar ifrån) ett antal dagar på ett "YYYY-MM-DD"-datum,
-// via lokal Date-konstruktor (år/månad/dag) istället för att parsa strängen
-// direkt - undviker UTC/lokal-tidszon-fällan med new Date("YYYY-MM-DD").
-function addDaysIso(dateIso, delta) {
-  const [y, m, d] = dateIso.split("-").map(Number);
-  return isoDate(new Date(y, m - 1, d + delta));
-}
-
 // Datumintervall [start, end] (båda inklusive, "YYYY-MM-DD") som en
 // kalenderhändelse täcker. Heldagshändelsers slutdatum är exklusivt
 // enligt iCal-spec (en helg fre-sön har end.date = måndagen), så det
@@ -444,22 +436,22 @@ class FamilyPlannerCard extends HTMLElement {
       .some((a) => (cache.data[a.entity] || []).some((ev) => eventCoversNow(ev)));
   }
 
-  // Är dateIso dagen efter personens senaste "borta"-dag i någon av deras
-  // borta-kalendrar - dvs kommer de hem just den dagen. Tar en explicit
-  // cache (Idag-vyn använder _awayEventsCache, veckoschemat _weekEventsCache)
-  // eftersom de täcker olika datumfönster.
+  // Är dateIso den sista dagen av en "borta"-händelse hos någon av
+  // personens borta-kalendrar - dvs kommer de hem just den dagen (sista
+  // dagen av händelsen räknas som återkomstdagen, inte dagen efter). Tar
+  // en explicit cache (Idag-vyn använder _awayEventsCache, veckoschemat
+  // _weekEventsCache) eftersom de täcker olika datumfönster.
   _isPersonReturningOn(p, dateIso, cache) {
     const cfg = this._config;
     if (!cache) return false;
     const key = personMatchKey(p);
     if (!key) return false;
-    const yesterday = addDaysIso(dateIso, -1);
     return (cfg.away_calendars || [])
       .filter((a) => (a.persons || []).includes(key))
       .some((a) =>
         (cache.data[a.entity] || []).some((ev) => {
           const range = eventDateRange(ev);
-          return !!range && range.end === yesterday;
+          return !!range && range.end === dateIso;
         })
       );
   }
@@ -576,15 +568,10 @@ class FamilyPlannerCard extends HTMLElement {
 
     this._weekEventsLoading = true;
     try {
-      // En dags marginal på var sida - annars missas en "borta"-händelse
-      // som slutar söndagen precis före veckans start när vi ska avgöra
-      // att måndagen är en "kommer hem"-dag (se _isPersonReturningOn).
-      const start = new Date(monday);
-      start.setDate(start.getDate() - 1);
       const end = new Date(monday);
-      end.setDate(end.getDate() + 8);
+      end.setDate(end.getDate() + 7);
       const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
-      const data = await this._fetchCalendarEvents(entityIds, start, end);
+      const data = await this._fetchCalendarEvents(entityIds, monday, end);
       this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), data };
     } finally {
       this._weekEventsLoading = false;
@@ -1240,7 +1227,9 @@ class FamilyPlannerCard extends HTMLElement {
             })
             .join("");
           const away = this._isPersonAwayNow(p);
-          const returningToday = !away && this._isPersonReturningOn(p, isoDate(new Date()), this._awayEventsCache);
+          // Sista dagen av en borta-händelse räknas som ankomstdag, så
+          // "borta"-toningen och "kommer hem idag" kan gälla samma dag.
+          const returningToday = this._isPersonReturningOn(p, isoDate(new Date()), this._awayEventsCache);
           const returningLine = returningToday
             ? `<div class="fpc-person-returning">🏠 Kommer hem idag</div>`
             : "";
@@ -1359,9 +1348,7 @@ class FamilyPlannerCard extends HTMLElement {
             .map((dateIso, i) => {
               const events = this._weekDayEvents(personSrcs, dateIso);
               // "Kommer hem"-markering läggs på som en syntetisk händelse
-              // längst fram den dag borta-perioden tar slut, se
-              // _isPersonReturningOn (kräver den utökade fetch-marginalen
-              // i _maybeFetchWeekEvents för att fånga gränsfall mån/sön).
+              // längst fram på borta-händelsens sista dag, se _isPersonReturningOn.
               const returning = this._isPersonReturningOn(p, dateIso, this._weekEventsCache);
               const finalEvents = returning
                 ? [{ summary: "🏠 Kommer hem", sourceIconKeywords: [] }, ...events]

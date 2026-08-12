@@ -673,7 +673,7 @@ class FamilyPlannerCard extends HTMLElement {
   _friendlyState(entityId, fallback) {
     const st = this._stateObj(entityId);
     if (!st) return fallback || "Okänd entitet";
-    if (st.state === "unknown" || st.state === "unavailable" || st.state === "") {
+    if (st.state === "unknown" || st.state === "unavailable" || st.state === "" || st.state === "off") {
       return fallback || "Inget planerat idag";
     }
     return st.state;
@@ -822,6 +822,7 @@ class FamilyPlannerCard extends HTMLElement {
           background: var(--state-icon-active-color, #f39c12);
           color: white;
         }
+        .fpc-general-circle-img { width: 100%; height: 100%; object-fit: cover; }
         .fpc-general-label {
           font-size: 0.7em; color: var(--secondary-text-color);
           text-align: center; line-height: 1.1;
@@ -858,11 +859,16 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-cd-chip {
           flex: 0 0 auto; min-width: 84px;
           display: flex; flex-direction: column; align-items: center; gap: 2px;
-          padding: 8px 10px; border-radius: 12px;
-          background: var(--secondary-background-color, rgba(127,127,127,0.1));
+          padding: 8px 10px;
         }
-        .fpc-cd-chip.fpc-cd-pinned { border: 1px solid var(--primary-color); }
-        .fpc-cd-avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; }
+        .fpc-cd-chip.fpc-cd-pinned { border: 1px solid var(--primary-color); border-radius: 12px; }
+        .fpc-cd-icon {
+          width: 44px; height: 44px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          background: var(--secondary-background-color, rgba(127,127,127,0.15));
+          color: var(--primary-color); overflow: hidden;
+        }
+        .fpc-cd-avatar { width: 100%; height: 100%; object-fit: cover; }
         .fpc-cd-days { font-size: 1em; font-weight: 600; color: var(--primary-color); }
         .fpc-cd-name { font-size: 0.7em; text-align: center; line-height: 1.15; }
         .fpc-cd-empty { color: var(--secondary-text-color); font-size: 0.85em; font-style: italic; }
@@ -1290,9 +1296,11 @@ class FamilyPlannerCard extends HTMLElement {
           .map(
             (it) => `
               <div class="fpc-cd-chip${it.pinned ? " fpc-cd-pinned" : ""}">
-                ${it.picture ? `<img class="fpc-cd-avatar" src="${it.picture}" alt="" />` : ""}
-                <div class="fpc-cd-days">${daysLabel(it.days)}</div>
+                <div class="fpc-cd-icon">
+                  ${it.picture ? `<img class="fpc-cd-avatar" src="${it.picture}" alt="" />` : `<ha-icon icon="${it.icon || "mdi:calendar-star"}"></ha-icon>`}
+                </div>
                 <div class="fpc-cd-name">${fpcEsc(it.displayName)}</div>
+                <div class="fpc-cd-days">${daysLabel(it.days)}</div>
               </div>
             `
           )
@@ -1381,10 +1389,15 @@ class FamilyPlannerCard extends HTMLElement {
           .map((g) => {
             const icon = g.icon || "mdi:bell";
             const label = g.name || g.entity;
+            const st = this._stateObj(g.entity);
+            const picture = st && st.attributes && st.attributes.entity_picture;
+            const circleInner = picture
+              ? `<img class="fpc-general-circle-img" src="${picture}" alt="" />`
+              : `<ha-icon icon="${icon}"></ha-icon>`;
             return `
               <div class="fpc-general-badge">
-                <div class="fpc-general-circle">
-                  <ha-icon icon="${icon}"></ha-icon>
+                <div class="fpc-general-circle"${picture ? ' style="background:transparent"' : ""}>
+                  ${circleInner}
                 </div>
                 <div class="fpc-general-label">${fpcEsc(label)}</div>
               </div>

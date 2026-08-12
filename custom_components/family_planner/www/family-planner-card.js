@@ -808,6 +808,10 @@ class FamilyPlannerCard extends HTMLElement {
           font-weight: 500; font-size: 0.78em; text-align: center;
           max-width: 56px; overflow: hidden; text-overflow: ellipsis;
         }
+        .fpc-person-state-row {
+          display: flex; flex-direction: row; flex-wrap: wrap;
+          align-items: center; gap: 4px 10px;
+        }
         .fpc-person-state-line {
           color: var(--secondary-text-color); font-size: 0.88em;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -1361,7 +1365,7 @@ class FamilyPlannerCard extends HTMLElement {
               ${this._personIdentityHtml(p)}
               <div class="fpc-person-info">
                 ${returningLine}
-                ${lines}
+                <div class="fpc-person-state-row">${lines}</div>
               </div>
             </div>
           `;
@@ -1474,14 +1478,17 @@ class FamilyPlannerCard extends HTMLElement {
           const cells = weekDates
             .map((dateIso, i) => {
               const events = this._weekDayEvents(personSrcs, dateIso);
-              // "Kommer hem"-markering läggs på som en syntetisk händelse
-              // längst fram på borta-händelsens sista dag, se
-              // _returningAwayCalendarsOn. Den faktiska borta-händelsens
-              // egen text (t.ex. "Hos mamma") finns redan med i events.
+              // "Kommer hem"-markering ersätter borta-kalenderns egen
+              // händelsetext (t.ex. "Hos mamma") på återkomstdagen - annars
+              // stod båda där och sa i praktiken samma sak.
               const returning = this._returningAwayCalendarsOn(p, dateIso, this._weekEventsCache);
+              const returningEntities = new Set(returning.map((a) => a.entity));
+              const otherEvents = events.filter(
+                (ev) => !(ev.sourceIsAway && returningEntities.has(ev.sourceEntity))
+              );
               const finalEvents = returning.length > 0
-                ? [{ summary: "🏠 Kommer hem", sourceIconKeywords: [] }, ...events]
-                : events;
+                ? [{ summary: "🏠 Kommer hem", sourceIconKeywords: [] }, ...otherEvents]
+                : otherEvents;
               return renderWeekCell(finalEvents, i === todayIdx);
             })
             .join("");
@@ -1525,6 +1532,7 @@ class FamilyPlannerCard extends HTMLElement {
           sourceColor: src.color,
           sourceIconKeywords: src.iconKeywords,
           sourceIsAway: !!src.isAway,
+          sourceEntity: src.calendar_entity,
         });
       });
     });

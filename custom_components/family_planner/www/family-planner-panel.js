@@ -225,6 +225,82 @@ class FamilyPlannerPanel extends HTMLElement {
     return input;
   }
 
+  // Laddar upp en fil till HA:s image-integration (samma som används för
+  // profilbilder) och returnerar en URL som kan sparas rakt av i configen.
+  async _uploadImage(file) {
+    const form = new FormData();
+    form.append("file", file);
+    const resp = await fetch(this._hass.hassUrl("/api/image/upload"), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this._hass.auth.data.access_token}` },
+      body: form,
+    });
+    if (!resp.ok) throw new Error("upload failed");
+    const data = await resp.json();
+    return `/api/image/serve/${data.id}/original`;
+  }
+
+  // Bildväljare - "Ladda upp bild"-knapp + miniatyr istället för att
+  // behöva skriva in en bild-URL för hand. Bilden laddas upp direkt till
+  // HA (samma image-integration som profilbilder) och den resulterande
+  // URL:en sparas i fältet, precis som om man skrivit in den själv.
+  _mkImagePicker(value, onChange) {
+    const wrap = document.createElement("div");
+    wrap.className = "fpp-image-picker";
+
+    const thumb = document.createElement("img");
+    thumb.className = "fpp-image-picker-thumb";
+    thumb.style.display = value ? "" : "none";
+    thumb.src = value || "";
+    thumb.alt = "";
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = "image/*";
+    fileInput.style.display = "none";
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "fpp-image-picker-btn";
+    btn.textContent = value ? "Byt bild" : "Ladda upp bild";
+    btn.addEventListener("click", () => fileInput.click());
+
+    const removeBtn = this._removeBtn(() => {
+      thumb.src = "";
+      thumb.style.display = "none";
+      btn.textContent = "Ladda upp bild";
+      removeBtn.style.display = "none";
+      onChange("");
+    });
+    removeBtn.style.display = value ? "" : "none";
+
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) return;
+      btn.disabled = true;
+      btn.textContent = "Laddar upp…";
+      try {
+        const url = await this._uploadImage(file);
+        thumb.src = url;
+        thumb.style.display = "";
+        removeBtn.style.display = "";
+        onChange(url);
+      } catch (err) {
+        btn.textContent = "Kunde inte ladda upp - försök igen";
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+      btn.textContent = "Byt bild";
+    });
+
+    wrap.appendChild(thumb);
+    wrap.appendChild(btn);
+    wrap.appendChild(removeBtn);
+    wrap.appendChild(fileInput);
+    return wrap;
+  }
+
   _row(children) {
     const row = document.createElement("div");
     row.className = "fpp-row";
@@ -330,13 +406,13 @@ class FamilyPlannerPanel extends HTMLElement {
       // Egna fält för bild - kan sättas tillsammans med ikonen ovan (t.ex.
       // en bild i Idag-vyn, men ikonen använd på andra ställen senare).
       // Bilden vinner om båda är satta, se renderKeywordBadge.
-      const imageInput = this._textInput(kw.image, "Bild-URL (valfri)", (val) => {
+      const imageInput = this._mkImagePicker(kw.image, (val) => {
         const list = [...getList()];
         list[kIdx] = { ...list[kIdx], image: val };
         setList(list);
         preview.innerHTML = renderKeywordBadge(list[kIdx]);
         this._markDirty();
-      }, "160px");
+      });
       const preview = document.createElement("div");
       preview.innerHTML = renderKeywordBadge(kw);
       const removeBtn = this._removeBtn(() => {
@@ -733,6 +809,16 @@ class FamilyPlannerPanel extends HTMLElement {
         .fpp-field { display: flex; flex-direction: column; flex: 1; }
         .fpp-kw-icon { --mdc-icon-size: 18px; }
         .fpp-kw-image { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; }
+        .fpp-image-picker { display: flex; align-items: center; gap: 6px; }
+        .fpp-image-picker-thumb {
+          width: 32px; height: 32px; border-radius: 6px; object-fit: cover;
+          background: var(--secondary-background-color, rgba(127,127,127,0.15));
+        }
+        .fpp-image-picker-btn {
+          border: 1px solid var(--divider-color); background: none; color: var(--primary-text-color);
+          border-radius: 6px; padding: 8px 10px; cursor: pointer; font-size: 0.85em;
+        }
+        .fpp-image-picker-btn:disabled { opacity: 0.6; cursor: default; }
         .fpp-empty { color: var(--secondary-text-color); font-style: italic; margin-bottom: 12px; }
         .fpp-away-persons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
         .fpp-away-person-chip {

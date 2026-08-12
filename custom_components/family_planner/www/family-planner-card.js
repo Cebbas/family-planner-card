@@ -164,6 +164,15 @@ function eventCoversDate(ev, dateIso) {
   return !!range && dateIso >= range.start && dateIso <= range.end;
 }
 
+// Starttid i millisekunder, för att sortera dagens händelser tidigast
+// först - heldagshändelser (bara ett date, ingen dateTime) räknas som
+// midnatt och hamnar därmed överst.
+function eventStartMs(ev) {
+  const startRaw = ev.start && (ev.start.dateTime || ev.start.date);
+  if (!startRaw) return 0;
+  return new Date(startRaw).getTime();
+}
+
 // Pågår händelsen just nu (används för att gråa ut ett barn som är borta
 // i Idag-vyn) - till skillnad från eventCoversDate jobbar den här med
 // faktiska tidpunkter, inte hela dagar, så en tidsatt hämtning kl 18:00
@@ -814,7 +823,6 @@ class FamilyPlannerCard extends HTMLElement {
         }
         .fpc-general-badge {
           display: flex; flex-direction: column; align-items: center; gap: 4px;
-          width: 56px;
         }
         .fpc-general-circle {
           width: 40px; height: 40px; border-radius: 50%;
@@ -823,10 +831,6 @@ class FamilyPlannerCard extends HTMLElement {
           color: white;
         }
         .fpc-general-circle-img { width: 100%; height: 100%; object-fit: cover; }
-        .fpc-general-label {
-          font-size: 0.7em; color: var(--secondary-text-color);
-          text-align: center; line-height: 1.1;
-        }
         .fpc-week {
           margin-top: 20px; padding-top: 16px;
           border-top: 1px solid var(--divider-color);
@@ -866,11 +870,11 @@ class FamilyPlannerCard extends HTMLElement {
           width: 44px; height: 44px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
           background: var(--secondary-background-color, rgba(127,127,127,0.15));
-          color: var(--primary-color); overflow: hidden;
+          color: var(--primary-color);
         }
-        .fpc-cd-avatar { width: 100%; height: 100%; object-fit: cover; }
-        .fpc-cd-days { font-size: 1em; font-weight: 600; color: var(--primary-color); }
-        .fpc-cd-name { font-size: 0.7em; text-align: center; line-height: 1.15; }
+        .fpc-cd-picture { width: 44px; height: 44px; object-fit: contain; }
+        .fpc-cd-days { font-size: 0.78em; font-weight: 500; color: var(--primary-color); }
+        .fpc-cd-name { font-size: 0.78em; font-weight: 500; text-align: center; line-height: 1.15; }
         .fpc-cd-empty { color: var(--secondary-text-color); font-size: 0.85em; font-style: italic; }
         .fpc-weather-row {
           display: flex; align-items: center; gap: 10px; padding: 8px 0 14px 0;
@@ -1296,9 +1300,11 @@ class FamilyPlannerCard extends HTMLElement {
           .map(
             (it) => `
               <div class="fpc-cd-chip${it.pinned ? " fpc-cd-pinned" : ""}">
-                <div class="fpc-cd-icon">
-                  ${it.picture ? `<img class="fpc-cd-avatar" src="${it.picture}" alt="" />` : `<ha-icon icon="${it.icon || "mdi:calendar-star"}"></ha-icon>`}
-                </div>
+                ${
+                  it.picture
+                    ? `<img class="fpc-cd-picture" src="${it.picture}" alt="" />`
+                    : `<div class="fpc-cd-icon"><ha-icon icon="${it.icon || "mdi:calendar-star"}"></ha-icon></div>`
+                }
                 <div class="fpc-cd-name">${fpcEsc(it.displayName)}</div>
                 <div class="fpc-cd-days">${daysLabel(it.days)}</div>
               </div>
@@ -1395,11 +1401,10 @@ class FamilyPlannerCard extends HTMLElement {
               ? `<img class="fpc-general-circle-img" src="${picture}" alt="" />`
               : `<ha-icon icon="${icon}"></ha-icon>`;
             return `
-              <div class="fpc-general-badge">
+              <div class="fpc-general-badge" title="${fpcEsc(label)}">
                 <div class="fpc-general-circle"${picture ? ' style="background:transparent"' : ""}>
                   ${circleInner}
                 </div>
-                <div class="fpc-general-label">${fpcEsc(label)}</div>
               </div>
             `;
           })
@@ -1523,6 +1528,7 @@ class FamilyPlannerCard extends HTMLElement {
         });
       });
     });
+    results.sort((a, b) => eventStartMs(a) - eventStartMs(b));
     return results;
   }
 

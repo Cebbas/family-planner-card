@@ -27,6 +27,7 @@ from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from homeassistant.loader import async_get_integration
 
 from .const import (
     CARD_FILENAME,
@@ -52,9 +53,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_config)
     websocket_api.async_register_command(hass, ws_save_config)
 
+    # Cache-busting query-param från manifest-versionen - utan den håller
+    # webbläsare (och HA:s frontend) fast vid en gammal cachad kopia av
+    # JS-modulen på obestämd tid efter en uppdatering, eftersom URL:en
+    # annars aldrig ändras mellan versioner. Höjs automatiskt varje
+    # release i och med att manifest.json:s version alltid bumpas då.
+    integration = await async_get_integration(hass, DOMAIN)
+    cache_bust = f"?v={integration.version}"
+
     # Ladda kortet på varje frontend-sida automatiskt - motsvarar att
     # lägga till det som en Lovelace-resurs manuellt.
-    frontend.add_extra_js_url(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
+    frontend.add_extra_js_url(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}{cache_bust}")
 
     await async_register_panel(
         hass,
@@ -62,7 +71,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webcomponent_name="family-planner-panel",
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
-        module_url=f"{STATIC_URL_BASE}/{PANEL_FILENAME}",
+        module_url=f"{STATIC_URL_BASE}/{PANEL_FILENAME}{cache_bust}",
         embed_iframe=False,
         trust_external=True,
         require_admin=False,

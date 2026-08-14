@@ -77,6 +77,22 @@ function daysUntil(dateStr) {
   return Math.round((t0 - n0) / 86400000);
 }
 
+// Flikarna i panelen, i visningsordning - key styr både .fpp-tab[data-tab]
+// och motsvarande sektions .fpp-tab-panel[data-tab-panel], se _render().
+const PANEL_TABS = [
+  { key: "general", label: "Allmänt" },
+  { key: "countdowns", label: "Nedräkningar" },
+  { key: "weather", label: "Väder" },
+  { key: "persons", label: "Personer" },
+  { key: "calendars", label: "Kalendrar" },
+  { key: "away", label: "Borta" },
+  { key: "keywords", label: "Nyckelord" },
+  { key: "month", label: "Månadskalender" },
+  { key: "vacation", label: "Semester" },
+  { key: "tts", label: "TTS" },
+  { key: "generalSensors", label: "Sensorer" },
+];
+
 class FamilyPlannerPanel extends HTMLElement {
   constructor() {
     super();
@@ -85,6 +101,7 @@ class FamilyPlannerPanel extends HTMLElement {
     this._dirty = false;
     this._saving = false;
     this._saveError = false;
+    this._activeTab = "general";
   }
 
   set hass(hass) {
@@ -903,10 +920,25 @@ class FamilyPlannerPanel extends HTMLElement {
           cursor: pointer;
         }
         #fpp-save-btn:disabled { opacity: 0.6; cursor: default; }
+        .fpp-tabs {
+          display: flex; overflow-x: auto; gap: 2px;
+          padding: 0 16px; max-width: 760px; margin: 0 auto;
+          background: var(--card-background-color, var(--primary-background-color));
+          border-bottom: 1px solid var(--divider-color);
+        }
+        .fpp-tab {
+          flex: 0 0 auto; background: none; border: none; cursor: pointer;
+          padding: 12px 14px 10px 14px; font-size: 0.88em; white-space: nowrap;
+          color: var(--secondary-text-color); border-bottom: 2px solid transparent;
+        }
+        .fpp-tab.fpp-tab-active {
+          color: var(--primary-color); border-bottom-color: var(--primary-color); font-weight: 500;
+        }
         .fpp-content { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px 16px; }
+        .fpp-tab-panel { display: none; }
+        .fpp-tab-panel.fpp-tab-panel-active { display: block; }
         .fpp-section {
           margin-bottom: 24px; padding-bottom: 18px;
-          border-bottom: 1px solid var(--divider-color);
         }
         .fpp-section:last-child { border-bottom: none; }
         .fpp-section-title { font-weight: 500; margin-bottom: 12px; font-size: 1.1em; }
@@ -965,8 +997,14 @@ class FamilyPlannerPanel extends HTMLElement {
           <div id="fpp-status"></div>
           <button id="fpp-save-btn">Spara</button>
         </div>
+        <div class="fpp-tabs">
+          ${PANEL_TABS.map(
+            (t) =>
+              `<button type="button" class="fpp-tab${this._activeTab === t.key ? " fpp-tab-active" : ""}" data-tab="${t.key}">${fpcEsc(t.label)}</button>`
+          ).join("")}
+        </div>
         <div class="fpp-content">
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "general" ? " fpp-tab-panel-active" : ""}" data-tab-panel="general">
             <div class="fpp-section-title">Allmänt</div>
             <div class="fpp-section-hint">
               Gäller alla Family Planner-kort på den här HA-instansen.
@@ -974,17 +1012,17 @@ class FamilyPlannerPanel extends HTMLElement {
             <div class="fpp-row" id="fpp-title-row"></div>
             <div class="fpp-checkbox-row" id="fpp-collapsed-row"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "countdowns" ? " fpp-tab-panel-active" : ""}" data-tab-panel="countdowns">
             <div class="fpp-section-title">Nedräkningar</div>
             <div class="fpp-row" id="fpp-maxshown-row"></div>
             <div id="fpp-countdown-list"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "weather" ? " fpp-tab-panel-active" : ""}" data-tab-panel="weather">
             <div class="fpp-section-title">Väder</div>
             <div class="fpp-row" id="fpp-weather-entity-row"></div>
             <div class="fpp-checkbox-row" id="fpp-weather-week-row"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "persons" ? " fpp-tab-panel-active" : ""}" data-tab-panel="persons">
             <div class="fpp-section-title">Personer</div>
             <div class="fpp-section-hint">
               Dessa personer, kalendrar och sensorer hämtas automatiskt av alla
@@ -992,12 +1030,12 @@ class FamilyPlannerPanel extends HTMLElement {
             </div>
             <div id="fpp-person-list"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "calendars" ? " fpp-tab-panel-active" : ""}" data-tab-panel="calendars">
             <div class="fpp-section-title">Delade kalendrar (hör inte till en specifik person)</div>
             <div class="fpp-row" id="fpp-calendars-label-row"></div>
             <div id="fpp-calendar-list"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "away" ? " fpp-tab-panel-active" : ""}" data-tab-panel="away">
             <div class="fpp-section-title">Borta hos andra föräldern</div>
             <div class="fpp-section-hint">
               Kalendrar som visar när ett barn är hos sin andra förälder. Barnet
@@ -1007,7 +1045,7 @@ class FamilyPlannerPanel extends HTMLElement {
             </div>
             <div id="fpp-away-list"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "keywords" ? " fpp-tab-panel-active" : ""}" data-tab-panel="keywords">
             <div class="fpp-section-title">Globala ikon-nyckelord</div>
             <div class="fpp-section-hint">
               Matchar ord i händelser/sensortexter mot en emoji, mdi-ikon eller
@@ -1016,20 +1054,20 @@ class FamilyPlannerPanel extends HTMLElement {
             </div>
             <div id="fpp-keyword-list"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "month" ? " fpp-tab-panel-active" : ""}" data-tab-panel="month">
             <div class="fpp-section-title">Månadskalender</div>
             <div class="fpp-checkbox-row" id="fpp-monthcal-row"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "vacation" ? " fpp-tab-panel-active" : ""}" data-tab-panel="vacation">
             <div class="fpp-section-title">Semestermarkering (färgar hela dagar i månadskalendern)</div>
             <div id="fpp-vacation-list"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "tts" ? " fpp-tab-panel-active" : ""}" data-tab-panel="tts">
             <div class="fpp-section-title">Röstuppläsning (TTS)</div>
             <div class="fpp-row" id="fpp-tts-entity-row"></div>
             <div class="fpp-row" id="fpp-tts-player-row"></div>
           </div>
-          <div class="fpp-section">
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "generalSensors" ? " fpp-tab-panel-active" : ""}" data-tab-panel="generalSensors">
             <div class="fpp-section-title">Allmänna sensorer (visas som rund ikon när "on")</div>
             <div id="fpp-general-list"></div>
           </div>
@@ -1039,6 +1077,12 @@ class FamilyPlannerPanel extends HTMLElement {
 
     this.querySelector("#fpp-menu-btn").addEventListener("click", () => this._toggleMenu());
     this.querySelector("#fpp-save-btn").addEventListener("click", () => this._save());
+    this.querySelectorAll(".fpp-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this._activeTab = btn.dataset.tab;
+        this._render();
+      });
+    });
     this._updateStatus();
 
     // Allmänt

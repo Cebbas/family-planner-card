@@ -998,6 +998,9 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-month-event-bar .fpc-kw-icon, .fpc-month-event-bar .fpc-kw-emoji {
           --mdc-icon-size: 11px; margin-right: 2px; vertical-align: -1px;
         }
+        .fpc-month-event-bar .fpc-kw-image {
+          width: 11px; height: 11px; margin-right: 2px; vertical-align: -1px;
+        }
         .fpc-month-overflow {
           position: absolute; right: 3px; bottom: 2px; font-size: 0.62em;
           color: var(--secondary-text-color); font-weight: 600;
@@ -2030,6 +2033,7 @@ class FamilyPlannerCard extends HTMLElement {
           color: src.color,
           summary: ev.summary || "(utan titel)",
           iconKeywords: src.iconKeywords,
+          image: splitEventImage(ev.description).image,
         });
       });
     });
@@ -2075,7 +2079,7 @@ class FamilyPlannerCard extends HTMLElement {
           }
           return;
         }
-        const badge = renderKeywordBadge(matchIcon(ev.summary, ev.iconKeywords));
+        const badge = renderKeywordBadge(ev.image ? { image: ev.image } : matchIcon(ev.summary, ev.iconKeywords));
         const top = topOffset + ev.lane * MONTH_LANE_HEIGHT;
         const leftPct = (ev.startCol / 7) * 100;
         const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;

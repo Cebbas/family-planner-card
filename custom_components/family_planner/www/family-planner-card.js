@@ -305,6 +305,27 @@ function joinEventImage(description, image) {
   return base ? `${base}\n\n[fpc-image]:${image}` : `[fpc-image]:${image}`;
 }
 
+// Samma knep som bilden ovan, för att komma ihåg att en händelse ska
+// döljas i vecko-/månadskalendern (syns fortfarande i dagsdetaljen där
+// man redigerar den) - se _renderCreateEventDialogContent. Läggs alltid
+// sist (efter en ev. bild-rad) och måste därför också plockas bort
+// först vid inläsning, se splitEventImage/joinEventImage-anropen i
+// _eventsForDateFromSources/_weekEventsForLanes/_buildEventPayload.
+const FPC_HIDDEN_MARKER_RE = /\n*\[fpc-hidden\]:1\s*$/;
+
+function splitEventHidden(description) {
+  if (!description) return { description: "", hidden: false };
+  const m = FPC_HIDDEN_MARKER_RE.exec(description);
+  if (!m) return { description, hidden: false };
+  return { description: description.slice(0, m.index), hidden: true };
+}
+
+function joinEventHidden(description, hidden) {
+  const base = (description || "").trim();
+  if (!hidden) return base;
+  return base ? `${base}\n\n[fpc-hidden]:1` : `[fpc-hidden]:1`;
+}
+
 function fpcEsc(str) {
   return String(str == null ? "" : str)
     .replace(/&/g, "&amp;")
@@ -1025,6 +1046,10 @@ class FamilyPlannerCard extends HTMLElement {
         }
         .fpc-month-event-time-allday { font-style: italic; }
         .fpc-month-event-location { opacity: 0.7; font-size: 0.92em; }
+        .fpc-month-event.fpc-month-event-hidden { opacity: 0.55; }
+        .fpc-month-event-hidden-tag {
+          font-size: 0.78em; font-style: italic; opacity: 0.8; margin-left: 2px;
+        }
         .fpc-month-event-empty { color: var(--secondary-text-color); font-size: 0.85em; font-style: italic; }
         .fpc-header-left { display: flex; align-items: center; gap: 8px; }
         .fpc-header-right { display: flex; align-items: center; gap: 4px; }
@@ -1259,7 +1284,7 @@ class FamilyPlannerCard extends HTMLElement {
   // filtrerat på _hiddenSources) - delas mellan veckotabellen och delningen.
   _weekDayEvents(sources, dateIso) {
     return this._eventsForDateFromSources(dateIso, this._weekEventsCache, sources).filter(
-      (ev) => !this._hiddenSources.has(ev.sourceKey)
+      (ev) => !this._hiddenSources.has(ev.sourceKey) && !ev.hidden
     );
   }
 
@@ -1586,11 +1611,13 @@ class FamilyPlannerCard extends HTMLElement {
         // eventCoversDate (inte bara startdatum) så flerdagarshändelser -
         // en "borta"-helg, ett sommarlov - visas/räknas varje dag de pågår.
         if (!eventCoversDate(ev, dateIso)) return;
-        const { description, image } = splitEventImage(ev.description);
+        const { description: rawDescription, hidden } = splitEventHidden(ev.description);
+        const { description, image } = splitEventImage(rawDescription);
         results.push({
           ...ev,
           description,
           image,
+          hidden,
           location: ev.location || "",
           sourceKey: src.key,
           sourceName: src.name,
@@ -1659,6 +1686,7 @@ class FamilyPlannerCard extends HTMLElement {
       location: "",
       description: "",
       image: "",
+      hidden: false,
     };
   }
 
@@ -1686,7 +1714,7 @@ class FamilyPlannerCard extends HTMLElement {
   _buildEventPayload(ce) {
     const event = { summary: ce.summary.trim() };
     if (ce.location && ce.location.trim()) event.location = ce.location.trim();
-    const description = joinEventImage(ce.description, ce.image);
+    const description = joinEventHidden(joinEventImage(ce.description, ce.image), ce.hidden);
     if (description) event.description = description;
     if (ce.allDay) {
       const endExclusive = new Date(ce.endIso);
@@ -2014,6 +2042,8 @@ class FamilyPlannerCard extends HTMLElement {
       if (this._hiddenSources.has(src.key)) return;
       const events = cache.data[src.calendar_entity] || [];
       events.forEach((ev) => {
+        const { description: rawDescription, hidden } = splitEventHidden(ev.description);
+        if (hidden) return;
         const range = eventDateRange(ev);
         if (!range) return;
         const clipStart = range.start < weekDates[0] ? weekDates[0] : range.start;
@@ -2033,7 +2063,7 @@ class FamilyPlannerCard extends HTMLElement {
           color: src.color,
           summary: ev.summary || "(utan titel)",
           iconKeywords: src.iconKeywords,
-          image: splitEventImage(ev.description).image,
+          image: splitEventImage(rawDescription).image,
         });
       });
     });
@@ -2161,11 +2191,12 @@ class FamilyPlannerCard extends HTMLElement {
           const locationHtml = ev.location
             ? ` <span class="fpc-month-event-location">📍 ${fpcEsc(ev.location)}</span>`
             : "";
+          const hiddenHtml = ev.hidden ? ` <span class="fpc-month-event-hidden-tag">Dold i vecka/månad</span>` : "";
           return `
-            <div class="fpc-month-event${editable ? " fpc-month-event-editable" : ""}" data-idx="${i}">
+            <div class="fpc-month-event${editable ? " fpc-month-event-editable" : ""}${ev.hidden ? " fpc-month-event-hidden" : ""}" data-idx="${i}">
               <div class="fpc-month-event-dot" style="background:${ev.sourceColor}"></div>
               ${time}
-              <div>${badge}${fpcEsc(summary)} <span style="opacity:0.7">– ${fpcEsc(ev.sourceName)}</span>${locationHtml}</div>
+              <div>${badge}${fpcEsc(summary)} <span style="opacity:0.7">– ${fpcEsc(ev.sourceName)}</span>${locationHtml}${hiddenHtml}</div>
             </div>
           `;
         })
@@ -2233,6 +2264,7 @@ class FamilyPlannerCard extends HTMLElement {
       location: ev.location || "",
       description: ev.description || "",
       image: ev.image || "",
+      hidden: !!ev.hidden,
       uid: ev.uid,
       recurrenceId: ev.recurrence_id || null,
     };
@@ -2351,6 +2383,10 @@ class FamilyPlannerCard extends HTMLElement {
           </div>
           ${this._creatingEventImageError ? `<div class="fpc-create-error">Kunde inte ladda upp bilden - försök igen.</div>` : ""}
         </div>
+        <div class="fpc-create-checkbox-row">
+          <input type="checkbox" id="fpc-ce-hidden" ${ce.hidden ? "checked" : ""} />
+          <label for="fpc-ce-hidden">Dölj i vecko-/månadskalender</label>
+        </div>
         ${
           isEdit
             ? ""
@@ -2450,6 +2486,9 @@ class FamilyPlannerCard extends HTMLElement {
     });
     dialog.querySelector("#fpc-ce-description").addEventListener("change", (ev) => {
       this._creatingEvent.description = ev.target.value;
+    });
+    dialog.querySelector("#fpc-ce-hidden").addEventListener("change", (ev) => {
+      this._creatingEvent.hidden = ev.target.checked;
     });
     dialog.querySelector("#fpc-ce-image-btn").addEventListener("click", () => {
       dialog.querySelector("#fpc-ce-image-input").click();

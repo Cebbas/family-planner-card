@@ -182,6 +182,15 @@ visat, där `{age}` hämtas från ett valt attribut på nedräkningens `entity`
 kunna kombineras med idén om förhandsgranskning i panelen så man ser det
 ifyllda resultatet direkt när man skriver mallen.
 
+## Dölj händelser via ikon-koppling
+Alternativ till den enkla "dölj i vecko-/månadskalender"-kryssrutan
+(klar, se redigera-dialogen): låta döljandet styras av vilket
+ikon-nyckelord händelsen matchar/tilldelas istället för en fristående
+kryssruta. I sidopanelens nyckelordslista skulle varje `icon_keywords`-
+post kunna få en egen "dölj matchande händelser"-flagga, så alla
+händelser med den ikonen automatiskt försvinner från vecko-/
+månadsvyerna utan att behöva kryssas i varje enskild händelse för sig.
+
 ## Övrigt (lägre prioritet)
 - Håll koll på om ha-icon saknas/ogiltig icon-sträng ger tyst fel istället
   för krasch.

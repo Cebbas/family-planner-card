@@ -32,7 +32,6 @@ from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
-from homeassistant.loader import async_get_integration
 
 from .const import (
     CARD_FILENAME,
@@ -62,12 +61,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Egna vyer istället för register_static_path/StaticPathConfig - ger
     # kontroll över svarshuvudena så vi kan slå av caching helt (se
     # _NoCacheJsView) istället för HA:s binära val mellan "cacha för
-    # evigt" och "inga extra huvuden alls". ?v=<version>-parametern
-    # nedanför räcker i de allra flesta fall, men Android-appens webview
-    # har visat sig hålla fast vid en cachad kopia ändå - detta täpper
-    # till det, om än inte en garanti (appens egen frontend-shell, som
-    # avgör vilken extra_js_url som ens efterfrågas, styrs helt av HA
-    # core/appen och ligger utanför den här integrationen).
+    # evigt" och "inga extra huvuden alls". URL:en är medvetet stabil
+    # (se kommentaren vid add_extra_js_url nedan för varför) - det är
+    # det här huvudet, inte URL:en, som garanterar färskt innehåll.
     hass.http.register_view(
         _NoCacheJsView(f"{STATIC_URL_BASE}/{CARD_FILENAME}", WWW_PATH / CARD_FILENAME)
     )
@@ -80,17 +76,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_get_hidden_events)
     websocket_api.async_register_command(hass, ws_set_event_hidden)
 
-    # Cache-busting query-param från manifest-versionen - utan den håller
-    # webbläsare (och HA:s frontend) fast vid en gammal cachad kopia av
-    # JS-modulen på obestämd tid efter en uppdatering, eftersom URL:en
-    # annars aldrig ändras mellan versioner. Höjs automatiskt varje
-    # release i och med att manifest.json:s version alltid bumpas då.
-    integration = await async_get_integration(hass, DOMAIN)
-    cache_bust = f"?v={integration.version}"
-
-    # Ladda kortet på varje frontend-sida automatiskt - motsvarar att
-    # lägga till det som en Lovelace-resurs manuellt.
-    frontend.add_extra_js_url(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}{cache_bust}")
+    # VIKTIGT: URL:en måste vara stabil (ingen ?v=<version>-parameter
+    # eller liknande) - frontend.add_extra_js_url() har inget publikt sätt
+    # att ta bort en tidigare tillagd URL igen (den ligger kvar tills
+    # nästa fullständiga omstart av HA, inte bara en omladdning av den
+    # här integrationen). Skulle URL:en ändras vid varje release skulle
+    # varje omladdning under utveckling lägga till ännu en <script>-tagg
+    # ovanpå alla tidigare - och eftersom customElements.define() bara
+    # går att köra en gång per tagnamn skulle webbläsaren fastna på
+    # vilken version som än laddades först sen senaste HA-omstarten,
+    # oavsett hur många nyare filer som sen serverats (precis det bugg-
+    # beteende en tidigare version av den här kommentaren försökte lösa
+    # med en cache-busting-parameter, som i praktiken gjorde det värre).
+    # Färskhet löses istället helt av _NoCacheJsView:s explicita
+    # Cache-Control-huvud - samma URL, men aldrig en cachad kopia.
+    frontend.add_extra_js_url(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
 
     await async_register_panel(
         hass,
@@ -98,7 +98,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         webcomponent_name="family-planner-panel",
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
-        module_url=f"{STATIC_URL_BASE}/{PANEL_FILENAME}{cache_bust}",
+        module_url=f"{STATIC_URL_BASE}/{PANEL_FILENAME}",
         embed_iframe=False,
         trust_external=True,
         require_admin=False,
@@ -123,11 +123,11 @@ class _NoCacheJsView(HomeAssistantView):
 
     register_static_path/StaticPathConfig only offers a binary choice -
     long-term "immutable" caching, or no explicit Cache-Control header at
-    all (our previous setup). The latter leaves it up to whatever HTTP
-    client is asking, and the Android Companion App's webview has been
-    seen holding on to an old response regardless of the ?v=<version>
-    cache-busting query param already appended to the URL. An explicit
-    no-store header closes that gap.
+    all (our previous setup, which left it up to whatever HTTP client was
+    asking - the Android Companion App's webview has been seen holding on
+    to an old response regardless). The URL itself is deliberately stable
+    across releases (see the add_extra_js_url call in async_setup_entry);
+    this header is what actually guarantees a fresh fetch every time.
     """
 
     requires_auth = False

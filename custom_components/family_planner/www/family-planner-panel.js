@@ -380,6 +380,46 @@ class FamilyPlannerPanel extends HTMLElement {
     return wrap;
   }
 
+  // Kryssrutor för att koppla en post (borta-kalender eller allmän
+  // kalender) till en eller flera av de konfigurerade personerna -
+  // matchar via personMatchKey(), inte index, så kopplingen håller sig
+  // rätt även om personlistan sorteras om. getSelected/setSelected pekar
+  // ut vilken lista som faktiskt läses/skrivs, delat mellan
+  // _awayCalendarCard och _calendarCard.
+  _mkPersonLinksPicker(getSelected, setSelected) {
+    const wrap = document.createElement("div");
+    wrap.className = "fpp-person-links";
+    const selected = getSelected();
+    if (this._data.persons.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "fpp-label";
+      empty.textContent = "Lägg till en person ovan först.";
+      wrap.appendChild(empty);
+    }
+    this._data.persons.forEach((p) => {
+      const key = personMatchKey(p);
+      const label = document.createElement("label");
+      label.className = "fpp-person-link-chip";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = !!key && selected.includes(key);
+      checkbox.disabled = !key;
+      checkbox.addEventListener("change", (ev) => {
+        // Läser getSelected() på nytt istället för att stänga över
+        // "selected" - annars tappas den första kryssningen om man
+        // kryssar två personer i samma kort utan omritning emellan.
+        const current = getSelected();
+        const list = ev.target.checked ? [...current, key] : current.filter((k) => k !== key);
+        setSelected(list);
+        this._markDirty();
+      });
+      label.appendChild(checkbox);
+      label.appendChild(document.createTextNode(key || "(sätt namn på personen först)"));
+      wrap.appendChild(label);
+    });
+    return wrap;
+  }
+
   _row(children) {
     const row = document.createElement("div");
     row.className = "fpp-row";
@@ -615,8 +655,21 @@ class FamilyPlannerPanel extends HTMLElement {
       this._render();
     });
 
+    const personsLabel = document.createElement("div");
+    personsLabel.className = "fpp-label";
+    personsLabel.textContent =
+      "Koppla till personer (visas då i deras veckoschema-rad istället för i den delade raden)";
+    const personsWrap = this._mkPersonLinksPicker(
+      () => (Array.isArray(this._data.calendars[idx].persons) ? this._data.calendars[idx].persons : []),
+      (list) => {
+        this._data.calendars[idx] = { ...this._data.calendars[idx], persons: list };
+      }
+    );
+
     card.appendChild(this._row([entityField]));
     card.appendChild(this._row([nameInput, colorInput, removeBtn]));
+    card.appendChild(personsLabel);
+    card.appendChild(personsWrap);
     return card;
   }
 
@@ -657,38 +710,12 @@ class FamilyPlannerPanel extends HTMLElement {
     const personsLabel = document.createElement("div");
     personsLabel.className = "fpp-label";
     personsLabel.textContent = "Vilka barn/personer gäller kalendern för";
-    const personsWrap = document.createElement("div");
-    personsWrap.className = "fpp-away-persons";
-    const selected = Array.isArray(a.persons) ? a.persons : [];
-    if (this._data.persons.length === 0) {
-      const empty = document.createElement("span");
-      empty.className = "fpp-label";
-      empty.textContent = "Lägg till en person ovan först.";
-      personsWrap.appendChild(empty);
-    }
-    this._data.persons.forEach((p) => {
-      const key = personMatchKey(p);
-      const label = document.createElement("label");
-      label.className = "fpp-away-person-chip";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.checked = !!key && selected.includes(key);
-      checkbox.disabled = !key;
-      checkbox.addEventListener("change", (ev) => {
-        // Läser this._data.away_calendars[idx].persons på nytt istället för
-        // att stänga över "selected" - annars tappas den första kryssningen
-        // om man kryssar två barn i samma kort utan omritning emellan.
-        const current = Array.isArray(this._data.away_calendars[idx].persons)
-          ? this._data.away_calendars[idx].persons
-          : [];
-        const list = ev.target.checked ? [...current, key] : current.filter((k) => k !== key);
+    const personsWrap = this._mkPersonLinksPicker(
+      () => (Array.isArray(this._data.away_calendars[idx].persons) ? this._data.away_calendars[idx].persons : []),
+      (list) => {
         this._data.away_calendars[idx] = { ...this._data.away_calendars[idx], persons: list };
-        this._markDirty();
-      });
-      label.appendChild(checkbox);
-      label.appendChild(document.createTextNode(key || "(sätt namn på personen först)"));
-      personsWrap.appendChild(label);
-    });
+      }
+    );
 
     card.appendChild(this._row([entityField]));
     card.appendChild(this._row([nameInput, colorInput, removeBtn]));
@@ -925,8 +952,8 @@ class FamilyPlannerPanel extends HTMLElement {
         }
         .fpp-image-picker-btn:disabled { opacity: 0.6; cursor: default; }
         .fpp-empty { color: var(--secondary-text-color); font-style: italic; margin-bottom: 12px; }
-        .fpp-away-persons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
-        .fpp-away-person-chip {
+        .fpp-person-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+        .fpp-person-link-chip {
           display: flex; align-items: center; gap: 6px; font-size: 0.85em;
           border: 1px solid var(--divider-color); border-radius: 16px; padding: 5px 10px;
         }

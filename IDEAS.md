@@ -15,7 +15,10 @@ innevarande vecka (cachat 5 min, separat cache från månadsvyn).
 ## Delade kalendrar utan koppling till en person
 ✅ Klar. Toppnivå-fältet `calendars` (entity/name/color) syns som egna
 filter/prickar i månadskalendern och samlas i en gemensam rad
-(`calendars_label`) i veckoschemat.
+(`calendars_label`) i veckoschemat. Går sedan även att koppla en sådan
+kalender till en eller flera personer (`persons`, samma
+`personMatchKey`-matchning som `away_calendars`) - kopplad visas den i
+deras egna veckoschema-rader istället för i den delade raden.
 
 ## Koppling till HA:s person.*-entiteter
 ✅ Klar. `person_entity` per person hämtar namn (`friendly_name`) och

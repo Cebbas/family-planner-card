@@ -324,6 +324,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._built = false;
     const today = new Date();
     this._calendarViewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+    this._weekViewOffset = 0; // antal veckor från innevarande vecka, se _startOfViewedWeek
     this._hiddenSources = new Set();
     this._dragging = false;
     this._dragMoved = false;
@@ -358,6 +359,10 @@ class FamilyPlannerCard extends HTMLElement {
         entity: c.entity,
         name: c.name || c.entity,
         color: c.color || "var(--secondary-text-color)",
+        // Kopplar kalendern till en eller flera personer (som away_
+        // calendars.persons) - kopplad visas den i deras veckoschema-rad
+        // istället för i den delade raden, se _calendarSources().
+        persons: Array.isArray(c.persons) ? c.persons : [],
       }));
   }
 
@@ -636,17 +641,25 @@ class FamilyPlannerCard extends HTMLElement {
       name: c.name,
       color: c.color,
       calendar_entity: c.entity,
-      personIdxs: [],
+      // Okopplad (default) hamnar kalendern i veckoschemats delade rad
+      // (personIdxs.length === 0, se sharedSources-filtret nedanför
+      // tabellbygget) - kopplad till en eller flera personer visas den
+      // istället bara i deras egna rader, som away_calendars redan gör.
+      personIdxs: cfg.persons
+        .map((p, idx) => idx)
+        .filter((idx) => (c.persons || []).includes(personMatchKey(cfg.persons[idx]))),
       isAway: false,
       iconKeywords: cfg.icon_keywords,
     }));
     return [...personSources, ...awaySources, ...sharedSources];
   }
 
-  _startOfThisWeek() {
+  // Måndagen i den vecka som just nu visas i veckoschemat - innevarande
+  // vecka + _weekViewOffset veckor (bläddrat med </>-knapparna).
+  _startOfViewedWeek() {
     const today = new Date();
     const idx = weekdayIndex(today);
-    return new Date(today.getFullYear(), today.getMonth(), today.getDate() - idx);
+    return new Date(today.getFullYear(), today.getMonth(), today.getDate() - idx + this._weekViewOffset * 7);
   }
 
   async _fetchCalendarEvents(entityIds, start, end) {
@@ -699,7 +712,7 @@ class FamilyPlannerCard extends HTMLElement {
     const sources = this._calendarSources();
     if (sources.length === 0) return;
 
-    const monday = this._startOfThisWeek();
+    const monday = this._startOfViewedWeek();
     const weekKey = isoDate(monday);
     const cache = this._weekEventsCache;
     const fresh = cache && cache.key === weekKey && Date.now() - cache.fetchedAt < 5 * 60 * 1000;

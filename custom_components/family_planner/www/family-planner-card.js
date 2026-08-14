@@ -305,27 +305,6 @@ function joinEventImage(description, image) {
   return base ? `${base}\n\n[fpc-image]:${image}` : `[fpc-image]:${image}`;
 }
 
-// Samma knep som bilden ovan, för att komma ihåg att en händelse ska
-// döljas i vecko-/månadskalendern (syns fortfarande i dagsdetaljen där
-// man redigerar den) - se _renderCreateEventDialogContent. Läggs alltid
-// sist (efter en ev. bild-rad) och måste därför också plockas bort
-// först vid inläsning, se splitEventImage/joinEventImage-anropen i
-// _eventsForDateFromSources/_weekEventsForLanes/_buildEventPayload.
-const FPC_HIDDEN_MARKER_RE = /\n*\[fpc-hidden\]:1\s*$/;
-
-function splitEventHidden(description) {
-  if (!description) return { description: "", hidden: false };
-  const m = FPC_HIDDEN_MARKER_RE.exec(description);
-  if (!m) return { description, hidden: false };
-  return { description: description.slice(0, m.index), hidden: true };
-}
-
-function joinEventHidden(description, hidden) {
-  const base = (description || "").trim();
-  if (!hidden) return base;
-  return base ? `${base}\n\n[fpc-hidden]:1` : `[fpc-hidden]:1`;
-}
-
 function fpcEsc(str) {
   return String(str == null ? "" : str)
     .replace(/&/g, "&amp;")
@@ -352,6 +331,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._dragEnd = null;
     this._creatingEvent = null; // { startIso, endIso, targetEntity }
     this._creatingEventRenderedFor = null;
+    this._hiddenEventKeys = new Set(); // "entity_id|uid" - se _maybeFetchHiddenEvents
   }
 
   // Delas mellan lokal YAML-parsning och delad konfiguration från
@@ -438,6 +418,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeFetchMonthEvents();
     this._maybeFetchWeekEvents();
     this._maybeFetchAwayStatus();
+    this._maybeFetchHiddenEvents();
     this._maybeLoadSharedConfig();
   }
 
@@ -503,6 +484,51 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeFetchWeekEvents();
     this._maybeFetchForecast();
     this._maybeFetchAwayStatus();
+  }
+
+  // "Dölj i vecko-/månadskalender" (se redigera-dialogen) är en lokal
+  // vypreferens, inte kalenderdata - sparas därför i integrationens egen
+  // lagring (family_planner/get_hidden_events) istället för i själva
+  // kalenderhändelsens beskrivning som bilden/platsen/beskrivningen gör.
+  // Annars skulle döljning aldrig gå att spara på en skrivskyddad kalender,
+  // trots att den inte rör kalenderns faktiska innehåll alls.
+  async _maybeFetchHiddenEvents() {
+    if (!this._hass) return;
+    if (this._hiddenEventsLoading) return;
+    const cache = this._hiddenEventsCache;
+    if (cache && Date.now() - cache.fetchedAt < 60 * 1000) return;
+
+    this._hiddenEventsLoading = true;
+    try {
+      const result = await this._hass.callWS({ type: "family_planner/get_hidden_events" });
+      this._hiddenEventKeys = new Set((result && result.keys) || []);
+      this._hiddenEventsCache = { fetchedAt: Date.now() };
+    } catch (err) {
+      // Äldre integrationsversion utan kommandot ännu - fortsätt utan
+      // döljning istället för att krascha kortet.
+    } finally {
+      this._hiddenEventsLoading = false;
+    }
+    this._update();
+  }
+
+  // Sparar/tar bort döljningen av en enskild händelse - körs separat från
+  // (och oberoende av om) själva kalender-sparandet, se _saveEditingEvent.
+  // Fel här sväljs tyst; att inte kunna spara en vypreferens ska aldrig
+  // blockera eller se ut som att det riktiga kalender-sparandet misslyckades.
+  async _setEventHidden(entityId, uid, hidden) {
+    if (!this._hass || !uid) return;
+    try {
+      const result = await this._hass.callWS({
+        type: "family_planner/set_event_hidden",
+        entity_id: entityId,
+        uid,
+        hidden,
+      });
+      this._hiddenEventKeys = new Set((result && result.keys) || []);
+    } catch (err) {
+      // Äldre integrationsversion utan kommandot ännu.
+    }
   }
 
   // Hämtar händelser för alla "borta hos andra föräldern"-kalendrar för
@@ -1631,8 +1657,8 @@ class FamilyPlannerCard extends HTMLElement {
         // eventCoversDate (inte bara startdatum) så flerdagarshändelser -
         // en "borta"-helg, ett sommarlov - visas/räknas varje dag de pågår.
         if (!eventCoversDate(ev, dateIso)) return;
-        const { description: rawDescription, hidden } = splitEventHidden(ev.description);
-        const { description, image } = splitEventImage(rawDescription);
+        const { description, image } = splitEventImage(ev.description);
+        const hidden = !!ev.uid && this._hiddenEventKeys.has(`${src.calendar_entity}|${ev.uid}`);
         results.push({
           ...ev,
           description,
@@ -1734,7 +1760,7 @@ class FamilyPlannerCard extends HTMLElement {
   _buildEventPayload(ce) {
     const event = { summary: ce.summary.trim() };
     if (ce.location && ce.location.trim()) event.location = ce.location.trim();
-    const description = joinEventHidden(joinEventImage(ce.description, ce.image), ce.hidden);
+    const description = joinEventImage(ce.description, ce.image);
     if (description) event.description = description;
     if (ce.allDay) {
       const endExclusive = new Date(ce.endIso);
@@ -2062,8 +2088,7 @@ class FamilyPlannerCard extends HTMLElement {
       if (this._hiddenSources.has(src.key)) return;
       const events = cache.data[src.calendar_entity] || [];
       events.forEach((ev) => {
-        const { description: rawDescription, hidden } = splitEventHidden(ev.description);
-        if (hidden) return;
+        if (ev.uid && this._hiddenEventKeys.has(`${src.calendar_entity}|${ev.uid}`)) return;
         const range = eventDateRange(ev);
         if (!range) return;
         const clipStart = range.start < weekDates[0] ? weekDates[0] : range.start;
@@ -2083,7 +2108,7 @@ class FamilyPlannerCard extends HTMLElement {
           color: src.color,
           summary: ev.summary || "(utan titel)",
           iconKeywords: src.iconKeywords,
-          image: splitEventImage(rawDescription).image,
+          image: splitEventImage(ev.description).image,
         });
       });
     });
@@ -2403,10 +2428,20 @@ class FamilyPlannerCard extends HTMLElement {
           </div>
           ${this._creatingEventImageError ? `<div class="fpc-create-error">Kunde inte ladda upp bilden - försök igen.</div>` : ""}
         </div>
+        ${
+          isEdit
+            ? `
         <div class="fpc-create-checkbox-row">
           <input type="checkbox" id="fpc-ce-hidden" ${ce.hidden ? "checked" : ""} />
           <label for="fpc-ce-hidden">Dölj i vecko-/månadskalender</label>
         </div>
+        <div class="fpc-create-hint">
+          Sparas direkt (oberoende av knappen nedan) - bara en lokal
+          vyinställning, kräver inte att kalendern går att skriva till.
+        </div>
+        `
+            : ""
+        }
         ${
           isEdit
             ? ""
@@ -2507,9 +2542,19 @@ class FamilyPlannerCard extends HTMLElement {
     dialog.querySelector("#fpc-ce-description").addEventListener("change", (ev) => {
       this._creatingEvent.description = ev.target.value;
     });
-    dialog.querySelector("#fpc-ce-hidden").addEventListener("change", (ev) => {
-      this._creatingEvent.hidden = ev.target.checked;
-    });
+    const hiddenInput = dialog.querySelector("#fpc-ce-hidden");
+    if (hiddenInput) {
+      hiddenInput.addEventListener("change", async (ev) => {
+        const checked = ev.target.checked;
+        this._creatingEvent.hidden = checked;
+        // Sparas direkt mot originalkalendern (inte ce.targetEntity, som
+        // kan peka på en ännu osparad flytt) - se _setEventHidden. En ren
+        // vypreferens, oberoende av "Spara"-knappen och kräver därför
+        // aldrig att kalendern går att skriva till.
+        await this._setEventHidden(ce.originalEntity, ce.uid, checked);
+        this._update();
+      });
+    }
     dialog.querySelector("#fpc-ce-image-btn").addEventListener("click", () => {
       dialog.querySelector("#fpc-ce-image-input").click();
     });

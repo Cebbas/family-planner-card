@@ -15,6 +15,9 @@ only step needed:
   on this HA instance (not tied to a single browser/user the way the
   earlier frontend/user_data-based approach was), exposed over two
   small websocket commands the card and panel both call.
+- Separately stores which individual calendar events are hidden from
+  the week/month view (a local view preference, not calendar data -
+  see ws_set_event_hidden), over its own pair of websocket commands.
 """
 from __future__ import annotations
 
@@ -32,6 +35,8 @@ from homeassistant.loader import async_get_integration
 from .const import (
     CARD_FILENAME,
     DOMAIN,
+    HIDDEN_EVENTS_STORAGE_KEY,
+    HIDDEN_EVENTS_STORAGE_VERSION,
     PANEL_FILENAME,
     PANEL_ICON,
     PANEL_TITLE,
@@ -42,16 +47,22 @@ from .const import (
 )
 
 WWW_PATH = Path(__file__).parent / "www"
+HIDDEN_EVENTS_DATA_KEY = f"{DOMAIN}_hidden_events"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Family Planner from a config entry."""
     hass.data[DOMAIN] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+    hass.data[HIDDEN_EVENTS_DATA_KEY] = Store(
+        hass, HIDDEN_EVENTS_STORAGE_VERSION, HIDDEN_EVENTS_STORAGE_KEY
+    )
 
     await _async_register_static_path(hass)
 
     websocket_api.async_register_command(hass, ws_get_config)
     websocket_api.async_register_command(hass, ws_save_config)
+    websocket_api.async_register_command(hass, ws_get_hidden_events)
+    websocket_api.async_register_command(hass, ws_set_event_hidden)
 
     # Cache-busting query-param från manifest-versionen - utan den håller
     # webbläsare (och HA:s frontend) fast vid en gammal cachad kopia av
@@ -83,6 +94,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Family Planner config entry."""
     hass.data.pop(DOMAIN, None)
+    hass.data.pop(HIDDEN_EVENTS_DATA_KEY, None)
     frontend.async_remove_panel(hass, PANEL_URL_PATH)
     # frontend har inget publikt sätt att ta bort en extra-js-url igen -
     # den ligger kvar tills nästa omstart av HA, vilket är ofarligt
@@ -109,6 +121,11 @@ def _get_store(hass: HomeAssistant) -> Store:
     return hass.data[DOMAIN]
 
 
+def _get_hidden_events_store(hass: HomeAssistant) -> Store:
+    """Return the "hidden in week/month view" store."""
+    return hass.data[HIDDEN_EVENTS_DATA_KEY]
+
+
 @websocket_api.websocket_command({vol.Required("type"): "family_planner/get_config"})
 @websocket_api.async_response
 async def ws_get_config(
@@ -132,3 +149,44 @@ async def ws_save_config(
     """Save the family planner config."""
     await _get_store(hass).async_save(msg["value"])
     connection.send_result(msg["id"])
+
+
+@websocket_api.websocket_command({vol.Required("type"): "family_planner/get_hidden_events"})
+@websocket_api.async_response
+async def ws_get_hidden_events(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
+) -> None:
+    """Return the keys ("entity_id|uid") of events hidden from week/month view.
+
+    A local view preference, not calendar data - kept out of the calendar
+    event itself (unlike location/description/image) specifically so
+    hiding an event never requires the underlying calendar to be
+    writable. See ws_set_event_hidden.
+    """
+    data = await _get_hidden_events_store(hass).async_load()
+    connection.send_result(msg["id"], {"keys": (data or {}).get("keys", [])})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "family_planner/set_event_hidden",
+        vol.Required("entity_id"): str,
+        vol.Required("uid"): str,
+        vol.Required("hidden"): bool,
+    }
+)
+@websocket_api.async_response
+async def ws_set_event_hidden(
+    hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
+) -> None:
+    """Mark (or unmark) a single event as hidden from week/month view."""
+    store = _get_hidden_events_store(hass)
+    data = await store.async_load()
+    keys = set((data or {}).get("keys", []))
+    key = f"{msg['entity_id']}|{msg['uid']}"
+    if msg["hidden"]:
+        keys.add(key)
+    else:
+        keys.discard(key)
+    await store.async_save({"keys": sorted(keys)})
+    connection.send_result(msg["id"], {"keys": sorted(keys)})

@@ -64,6 +64,19 @@ function renderKeywordBadge(kw) {
   return renderIconBadge(kw.icon);
 }
 
+// Måste hållas i synk med samma funktion i family-planner-card.js -
+// används av nedräknings-förhandsgranskningen (_previewCountdownEntity)
+// för att visa exakt samma antal dagar som kortet faktiskt skulle räkna ut.
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  if (isNaN(target.getTime())) return null;
+  const now = new Date();
+  const t0 = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  const n0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.round((t0 - n0) / 86400000);
+}
+
 class FamilyPlannerPanel extends HTMLElement {
   constructor() {
     super();
@@ -225,6 +238,72 @@ class FamilyPlannerPanel extends HTMLElement {
     return input;
   }
 
+  // "Vad blir resultatet just nu"-rad under en entitetsväljare - visar
+  // antingen vad valet faktiskt ger (aktuellt state/attribut) eller en
+  // tydlig varning om entiteten saknas eller ger ett tomt/oanvändbart
+  // resultat, så felkonfiguration syns direkt i panelen istället för att
+  // man måste öppna kortet efteråt och gissa varför en rad är tom.
+  // resultFn(stateObjOrUndefined) => { text, warn }. Uppdateras INTE av
+  // bakgrundsuppdateringar (samma medvetna avvägning som ikon-
+  // förhandsgranskningen) - bara när fältet självt ändras, se
+  // _renderStatePreview-anropen i onChange-lyssnarna nedan.
+  _mkStatePreview(entityId, resultFn) {
+    const el = document.createElement("div");
+    this._renderStatePreview(el, entityId, resultFn);
+    return el;
+  }
+
+  _renderStatePreview(el, entityId, resultFn) {
+    el.className = "fpp-state-preview";
+    if (!entityId) {
+      el.textContent = "";
+      return;
+    }
+    const st = this._hass ? this._hass.states[entityId] : undefined;
+    const { text, warn } = resultFn(st);
+    el.textContent = text;
+    el.classList.toggle("fpp-state-preview-warn", !!warn);
+  }
+
+  // Speglar _friendlyState/_personTodayLines i family-planner-card.js -
+  // unknown/unavailable/tomt/"off" räknas som "inget planerat" där.
+  _previewPersonEntity(st) {
+    if (!st) return { text: "⚠ Entiteten hittades inte", warn: true };
+    if (["unknown", "unavailable", "", "off"].includes(st.state)) {
+      return { text: 'Visar just nu: "Inget planerat idag" (tomt/av-state)', warn: true };
+    }
+    if (st.attributes && st.attributes.entity_picture) {
+      return { text: "Visar just nu: en bild (entity_picture satt)", warn: false };
+    }
+    return { text: `Visar just nu: "${st.state}"`, warn: false };
+  }
+
+  // Speglar filtret i _update() (family-planner-card.js) - "on" är enda
+  // state som gör att raden syns i Idag-vyn.
+  _previewGeneralEntity(st) {
+    if (!st) return { text: "⚠ Entiteten hittades inte", warn: true };
+    if (st.state === "on") return { text: "Syns just nu i Idag-raden (state: on)", warn: false };
+    return { text: `Syns inte just nu (state: "${st.state}", väntar på "on")`, warn: false };
+  }
+
+  // Speglar uträkningen i _update() (family-planner-card.js) - en
+  // nedräkning med ett datum som inte går att tolka visas inte alls i
+  // kortet, helt tyst, så det är extra viktigt att flagga här.
+  _previewCountdownEntity(st, dateAttribute) {
+    if (!st) return { text: "⚠ Entiteten hittades inte", warn: true };
+    const dateVal = dateAttribute ? st.attributes[dateAttribute] : st.state;
+    if (dateVal === undefined) {
+      return { text: `⚠ Attributet "${dateAttribute}" finns inte på entiteten`, warn: true };
+    }
+    const days = daysUntil(dateVal);
+    if (days === null) {
+      return { text: `⚠ "${dateVal}" går inte att tolka som ett datum - visas inte i kortet`, warn: true };
+    }
+    if (days < 0) return { text: `${-days} dagar sedan (visas bara om "Visa alltid" är ikryssad)`, warn: false };
+    if (days === 0) return { text: "Idag!", warn: false };
+    return { text: `${days} dagar kvar`, warn: false };
+  }
+
   // Laddar upp en fil till HA:s image-integration (samma som används för
   // profilbilder) och returnerar en URL som kan sparas rakt av i configen.
   async _uploadImage(file) {
@@ -355,11 +434,13 @@ class FamilyPlannerPanel extends HTMLElement {
     wrap.appendChild(label);
 
     (p.entities || []).forEach((eid, eIdx) => {
+      const preview = this._mkStatePreview(eid, (st) => this._previewPersonEntity(st));
       const picker = this._mkEntityPicker(eid, (val) => {
         const list = [...(this._data.persons[idx].entities || [])];
         list[eIdx] = val;
         this._data.persons[idx] = { ...this._data.persons[idx], entities: list };
         this._markDirty();
+        this._renderStatePreview(preview, val, (st) => this._previewPersonEntity(st));
       });
       const removeBtn = this._removeBtn(() => {
         const list = (this._data.persons[idx].entities || []).filter((_, i) => i !== eIdx);
@@ -368,6 +449,7 @@ class FamilyPlannerPanel extends HTMLElement {
         this._render();
       });
       wrap.appendChild(this._row([picker, removeBtn]));
+      wrap.appendChild(preview);
     });
 
     wrap.appendChild(
@@ -619,6 +701,17 @@ class FamilyPlannerPanel extends HTMLElement {
     const card = document.createElement("div");
     card.className = "fpp-item-card";
 
+    // Läser alltid tillbaka aktuellt entity/date_attribute från
+    // this._data (inte de ursprungliga item-parametrarna) så
+    // förhandsgranskningen stämmer oavsett vilket av de två fälten som
+    // ändrades sist.
+    const refreshCountdownPreview = () => {
+      const current = this._data.countdowns.items[idx];
+      this._renderStatePreview(preview, current.entity, (st) =>
+        this._previewCountdownEntity(st, current.date_attribute)
+      );
+    };
+
     const entityField = document.createElement("div");
     entityField.className = "fpp-field";
     entityField.innerHTML = `<div class="fpp-label">Entitet (state = datum, om inget attribut anges nedan)</div>`;
@@ -628,8 +721,11 @@ class FamilyPlannerPanel extends HTMLElement {
         items[idx] = { ...items[idx], entity: val };
         this._data.countdowns = { ...this._data.countdowns, items };
         this._markDirty();
+        refreshCountdownPreview();
       })
     );
+    const preview = this._mkStatePreview(item.entity, (st) => this._previewCountdownEntity(st, item.date_attribute));
+    entityField.appendChild(preview);
 
     const nameInput = this._textInput(item.name, "Namn", (val) => {
       const items = [...this._data.countdowns.items];
@@ -647,6 +743,7 @@ class FamilyPlannerPanel extends HTMLElement {
         items[idx] = { ...items[idx], date_attribute: val };
         this._data.countdowns = { ...this._data.countdowns, items };
         this._markDirty();
+        refreshCountdownPreview();
       })
     );
 
@@ -720,8 +817,11 @@ class FamilyPlannerPanel extends HTMLElement {
         general[idx] = { ...general[idx], entity: val };
         this._data.general = general;
         this._markDirty();
+        this._renderStatePreview(preview, val, (st) => this._previewGeneralEntity(st));
       }, null, ["binary_sensor"])
     );
+    const preview = this._mkStatePreview(g.entity, (st) => this._previewGeneralEntity(st));
+    entityField.appendChild(preview);
 
     const nameInput = this._textInput(g.name, "Namn", (val) => {
       const general = [...this._data.general];
@@ -806,6 +906,11 @@ class FamilyPlannerPanel extends HTMLElement {
           border-radius: 6px; padding: 9px 12px; cursor: pointer; font-size: 0.9em; width: 100%;
         }
         .fpp-label { font-size: 0.8em; color: var(--secondary-text-color); margin-bottom: 3px; margin-top: 6px; }
+        .fpp-state-preview {
+          font-size: 0.78em; color: var(--secondary-text-color); margin: 2px 0 6px;
+          min-height: 1.2em;
+        }
+        .fpp-state-preview-warn { color: var(--error-color, #db4437); }
         .fpp-field { display: flex; flex-direction: column; flex: 1; }
         .fpp-kw-icon { --mdc-icon-size: 18px; }
         .fpp-kw-image { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; }

@@ -908,6 +908,8 @@ class FamilyPlannerCard extends HTMLElement {
         table.fpc-table th.fpc-today-col, table.fpc-table td.fpc-today-col {
           background: var(--primary-color); color: white; border-radius: 6px;
         }
+        .fpc-week-event { cursor: pointer; }
+        .fpc-week-event:hover { text-decoration: underline; }
         table.fpc-table td.fpc-person-col {
           text-align: left; font-weight: 500; white-space: nowrap;
         }
@@ -1544,7 +1546,13 @@ class FamilyPlannerCard extends HTMLElement {
 
       const weekDates = this._weekDates();
       const sources = this._calendarSources();
-      const renderWeekCell = (events, isToday) => {
+      // Slår upp händelseobjektet bakom en klickad .fpc-week-event-span
+      // igen (se click-lyssnaren nedan) - key är unik nog för en enskild
+      // veckotabell (uid finns bara på riktiga, redigerbara kalender-
+      // händelser; "Kommer hem"-markeringen och liknande syntetiska
+      // poster saknar uid och blir därför aldrig klickbara).
+      const weekEventLookup = new Map();
+      const renderWeekCell = (events, isToday, dateIso) => {
         if (events.length === 0) {
           return `<td class="${isToday ? "fpc-today-col" : ""}">–</td>`;
         }
@@ -1552,7 +1560,11 @@ class FamilyPlannerCard extends HTMLElement {
           .map((ev) => {
             const summary = ev.summary || "(utan titel)";
             const badge = renderKeywordBadge(ev.image ? { image: ev.image } : matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
-            return `${badge}${fpcEsc(summary)}`;
+            const inner = `${badge}${fpcEsc(summary)}`;
+            if (!ev.uid) return inner;
+            const key = `${ev.uid}|${dateIso}`;
+            weekEventLookup.set(key, ev);
+            return `<span class="fpc-week-event" data-key="${fpcEsc(key)}">${inner}</span>`;
           })
           .join(" • ");
         return `<td class="${isToday ? "fpc-today-col" : ""}">${html}</td>`;
@@ -1575,7 +1587,7 @@ class FamilyPlannerCard extends HTMLElement {
               const finalEvents = returning.length > 0
                 ? [{ summary: "🏠 Kommer hem", sourceIconKeywords: [] }, ...otherEvents]
                 : otherEvents;
-              return renderWeekCell(finalEvents, i === todayIdx);
+              return renderWeekCell(finalEvents, i === todayIdx, dateIso);
             })
             .join("");
           return `<tr><td class="fpc-person-col">${this._personIdentityHtml(p)}</td>${cells}</tr>`;
@@ -1586,7 +1598,7 @@ class FamilyPlannerCard extends HTMLElement {
       let sharedRow = "";
       if (sharedSources.length > 0) {
         const cells = weekDates
-          .map((dateIso, i) => renderWeekCell(this._weekDayEvents(sharedSources, dateIso), i === todayIdx))
+          .map((dateIso, i) => renderWeekCell(this._weekDayEvents(sharedSources, dateIso), i === todayIdx, dateIso))
           .join("");
         sharedRow = `<tr><td class="fpc-person-col">${fpcEsc(cfg.calendars_label)}</td>${cells}</tr>`;
       }
@@ -1595,6 +1607,14 @@ class FamilyPlannerCard extends HTMLElement {
         <thead><tr><th></th>${headerCells}</tr></thead>
         <tbody>${weatherWeekRow}${rows}${sharedRow}</tbody>
       `;
+      tableEl.querySelectorAll(".fpc-week-event[data-key]").forEach((el) => {
+        el.addEventListener("click", () => {
+          const ev = weekEventLookup.get(el.dataset.key);
+          if (!ev) return;
+          this._creatingEvent = this._editingEventFromCalendarEvent(ev);
+          this._updateMonthCalendar();
+        });
+      });
     }
 
     this._updateMonthCalendar();

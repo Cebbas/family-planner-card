@@ -50,8 +50,11 @@ skapa nya händelser genom att dra över dagar (eller via "+ Lägg till
 händelse" på en vald dag) — sparas med `calendar.create_event`, kräver en
 kalender med skrivstöd.
 
-Naturliga nästa steg: egna vy-lägen (vecka/dag/lista) utöver månadsvyn,
-och möjlighet att redigera/ta bort befintliga events, inte bara skapa nya.
+✅ Klar (redigering). Klick på en händelse (i månadsvyns dagsdetalj eller
+veckoschemat) öppnar samma dialog i redigeringsläge - byt titel/tid/plats/
+beskrivning/bild, flytta till en annan kalender, eller ta bort.
+
+Naturligt nästa steg: egna vy-lägen (vecka/dag/lista) utöver månadsvyn.
 
 ## Väderrad
 ✅ Klar. `weather.entity` visar aktuell temp/ikon under nedräkningsraden,
@@ -95,13 +98,17 @@ substräng (undviker t.ex. att "bad" matchar inuti "badminton"), och
 möjlighet att visa *bara* badgen utan text som ett kompakt läge.
 
 ## Förhandsgranskning av utfallet i konfigurationsstegen
-I panelens olika inställningssteg (t.ex. när man väljer en sensor för en
-person) — visa vad valet faktiskt resulterar i just nu, baserat på
-entitetens nuvarande state/attribut, inte bara vilken entitet som är vald.
-Bör även tydligt visa när sensorn *inte* ger ett användbart resultat (tomt
-state, oväntat format, eller entiteten saknas/är otillgänglig), så
-felkonfiguration upptäcks direkt i panelen istället för att man måste öppna
-kortet efteråt och gissa varför en rad inte ser ut som väntat.
+✅ Klar (för Idag-sensorer, nedräkningar, allmän rad). Varje entitetsväljare
+i de tre stegen visar en liten rad under sig med vad valet faktiskt ger
+just nu (t.ex. "5 dagar kvar", eller "Visar just nu: 'Fotboll 18:00'"),
+och flaggar tydligt (röd text) om entiteten saknas, ger ett tomt/av-state,
+eller har ett datumattribut som inte går att tolka. Uppdateras inte live
+av bakgrundsuppdateringar - bara när man ändrar fältet, samma medvetna
+avvägning som ikon-nyckelordens förhandsvisning.
+
+Kvar att göra om man vill gå vidare: samma slags förhandsgranskning för
+väder-/TTS-entiteterna och kalenderväljarna (person/calendar_entity,
+delade kalendrar, borta-kalendrar).
 
 ## Dagens sista/nästa transport
 En liten rad med nästa avgång, t.ex. via en Trafikläget/Resrobot-
@@ -122,10 +129,11 @@ En textbaserad variant av allmänna raden (istället för bara ikon när
 "on"), t.ex. en rad som visar "Ikväll: tacos" hämtat från en sensor.
 
 ## Tryck-och-håll för att redigera veckoschemat
-Långt tryck på en cell i veckoschemat öppnar en snabbdialog för att sätta/
-ändra rätt attribut på `week_entity` direkt, utan att gå via Developer
-Tools. (Motsvarande finns nu i månadskalendern via drag/klick, men inte
-i veckotabellen än.)
+✅ Klar, fast löst annorlunda än ursprungstanken (som byggde på det sedan
+länge borttagna `week_entity`-attributet, se "Enhetlig kalenderkälla för
+vecka + månad" ovan). Klick på en händelse i veckoschemat öppnar numera
+samma redigera-dialog som månadskalendern, istället för ett långt tryck
+mot ett attribut.
 
 ## Notis-badge i headern
 ✅ Klar. En röd badge bredvid titeln visar antal aktiva allmänna sensorer,
@@ -172,6 +180,17 @@ Komplement till "notis om tom dag": skicka en riktig push-notis (inte
 bara UI-badge) via en `notify.*`-tjänst om en persons vecka är helt tom
 flera dagar i rad, så man inte missar att sensorn slutat uppdateras även
 när man inte har dashboarden öppen.
+
+## Notiser och påminnelser för kommande händelser
+Skicka en riktig påminnelse (push via `notify.*` och/eller TTS) ett valbart
+antal minuter/timmar innan en händelse i kalendern börjar, t.ex. "Fotboll om
+30 min". Skiljer sig från "Notis via notify-tjänst om tom vecka" ovan (som
+varnar om en persons vecka är tom) genom att istället varna *innan* en
+specifik händelse. Kräver troligen en bakgrundskoll (automation eller
+periodisk uppdatering i integrationen) som med jämna mellanrum går igenom
+kommande events per person och skickar en notis för de som ligger inom
+påminnelsefönstret och inte redan notifierats om, plus ett sätt att sätta
+påminnelsetid globalt eller per person/kalender i sidopanelen.
 
 ## Dynamisk text i nedräkningsnamnet
 Just nu är `name` på en nedräkning en helt statisk text. Låt den innehålla

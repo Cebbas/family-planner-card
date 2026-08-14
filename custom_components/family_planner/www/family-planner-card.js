@@ -933,7 +933,7 @@ class FamilyPlannerCard extends HTMLElement {
           border-top: 1px solid var(--divider-color);
         }
         .fpc-week-title {
-          font-weight: 500; margin-bottom: 10px; font-size: 1.05em;
+          font-weight: 500; font-size: 1.05em;
         }
         table.fpc-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         table.fpc-table th, table.fpc-table td {
@@ -1113,7 +1113,10 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-filter-chip.fpc-filter-active { opacity: 1; }
         .fpc-filter-dot { width: 8px; height: 8px; border-radius: 50%; }
         .fpc-month-cell.fpc-dragging { outline: 2px dashed var(--primary-color); }
-        .fpc-week-header-row { display: flex; align-items: center; justify-content: space-between; }
+        .fpc-week-header-row {
+          display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;
+        }
+        .fpc-week-nav-group { display: flex; align-items: center; gap: 2px; }
         .fpc-share-btn {
           background: none; border: 1px solid var(--divider-color); border-radius: 14px;
           padding: 4px 10px; font-size: 0.78em; color: var(--primary-text-color); cursor: pointer;
@@ -1198,7 +1201,11 @@ class FamilyPlannerCard extends HTMLElement {
         </div>
         <div class="fpc-week">
           <div class="fpc-week-header-row">
-            <div class="fpc-week-title" id="fpc-week-title">Veckoschema</div>
+            <div class="fpc-week-nav-group">
+              <button class="fpc-month-nav" id="fpc-week-prev">‹</button>
+              <div class="fpc-week-title" id="fpc-week-title">Veckoschema</div>
+              <button class="fpc-month-nav" id="fpc-week-next">›</button>
+            </div>
             <button class="fpc-share-btn" id="fpc-share-btn">Dela</button>
           </div>
           <table class="fpc-table" id="fpc-table"></table>
@@ -1224,6 +1231,17 @@ class FamilyPlannerCard extends HTMLElement {
       this._collapsed = !this._collapsed;
       this.shadowRoot.querySelector("#fpc-today").classList.toggle("collapsed", this._collapsed);
       this.shadowRoot.querySelector("#fpc-toggle").classList.toggle("collapsed", this._collapsed);
+    });
+
+    this.shadowRoot.querySelector("#fpc-week-prev").addEventListener("click", () => {
+      this._weekViewOffset -= 1;
+      this._maybeFetchWeekEvents();
+      this._update();
+    });
+    this.shadowRoot.querySelector("#fpc-week-next").addEventListener("click", () => {
+      this._weekViewOffset += 1;
+      this._maybeFetchWeekEvents();
+      this._update();
     });
 
     this.shadowRoot.querySelector("#fpc-month-prev").addEventListener("click", () => {
@@ -1330,7 +1348,7 @@ class FamilyPlannerCard extends HTMLElement {
   }
 
   _weekDates() {
-    const monday = this._startOfThisWeek();
+    const monday = this._startOfViewedWeek();
     return DAY_KEYS.map((_, i) => {
       const d = new Date(monday);
       d.setDate(d.getDate() + i);
@@ -1340,7 +1358,7 @@ class FamilyPlannerCard extends HTMLElement {
 
   _shareWeek() {
     const cfg = this._config;
-    const todayIdx = this._todayKey();
+    const todayIdx = this._weekViewOffset === 0 ? this._todayKey() : -1;
     const weekDates = this._weekDates();
     const sources = this._calendarSources();
     const lines = [cfg.title, ""];
@@ -1546,11 +1564,14 @@ class FamilyPlannerCard extends HTMLElement {
     // Veckoschema
     const weekTitleEl = this.shadowRoot.querySelector("#fpc-week-title");
     if (weekTitleEl) {
-      weekTitleEl.textContent = `Veckoschema (v. ${isoWeekNumber(this._startOfThisWeek())})`;
+      weekTitleEl.textContent = `Veckoschema (v. ${isoWeekNumber(this._startOfViewedWeek())})`;
     }
     const tableEl = this.shadowRoot.querySelector("#fpc-table");
     if (tableEl) {
-      const todayIdx = this._todayKey();
+      // Bara markera en "idag"-kolumn när man faktiskt tittar på
+      // innevarande vecka - annars skulle t.ex. måndagen råka highlightas
+      // i nästa veckas tabell bara för att idag också är en måndag.
+      const todayIdx = this._weekViewOffset === 0 ? this._todayKey() : -1;
       const headerCells = DAY_LABELS.map(
         (label, i) => `<th class="${i === todayIdx ? "fpc-today-col" : ""}">${label}</th>`
       ).join("");

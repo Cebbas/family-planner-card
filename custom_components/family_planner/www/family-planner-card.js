@@ -2821,7 +2821,14 @@ class FamilyPlannerCard extends HTMLElement {
           <div class="fpc-create-hint">
             ${
               isEdit
-                ? "Gör om händelsen till en riktig återkommande serie med start från detta tillfälle, istället för enskilda händelser."
+                ? `Gör om händelsen till en riktig återkommande serie med start från
+                   detta tillfälle, istället för enskilda händelser - men bara om
+                   händelsen redan hör hemma direkt på den här kalendern (t.ex.
+                   skapad här i kortet). Kommer händelsen ursprungligen från en
+                   annan, sammanslagen källa (en importerad/synkad kalender)
+                   skickas ändringen dit istället, och den källan kan tyst
+                   sakna stöd för att lägga till upprepning i efterhand - spara
+                   då om som en ny händelse med upprepning istället.`
                 : "Skapas som en riktig återkommande serie, inte enskilda händelser."
             }
             Stöds av bl.a. CalDAV och HA:s inbyggda lokala kalender - vissa

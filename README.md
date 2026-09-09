@@ -350,6 +350,21 @@ veckoschemat/månadskalendern) — där gäller ändringen bara det
 tillfället (`recurrence_id`), och en ny toppnivå-upprepning skulle inte
 vara meningsfull.
 
+**Viktigt vid redigering av en redan befintlig händelse:** ändringen
+skickas till den kalender händelsen faktiskt hör hemma på. Är
+`calendar_entity` en sammanslagen cal_combiner-kalender och händelsen
+skapades direkt där (via kortet, HA:s kalendervy eller CalDAV) sparas
+upprepningen på riktigt. Kommer händelsen istället ursprungligen från
+en av cal_combiners *källkalendrar* (en importerad/synkad kalender,
+t.ex. Google eller en ICS-länk) vidarebefordras ändringen dit — och en
+källa som saknar stöd för att lägga till upprepning **i efterhand** på
+ett redan befintligt event kan då tyst strunta i `rrule`-fältet utan
+att ge något felmeddelande (till skillnad från när källan helt saknar
+skriv-/redigeringsstöd, vilket ger ett tydligt fel). Vill du garanterat
+få en riktig serie: skapa händelsen på nytt direkt i kortet med
+upprepning satt från början — nya händelser går alltid till
+cal_combiners egen kalender.
+
 Kräver att `calendar_entity` pekar på en kalender med skrivstöd (t.ex.
 en lokal CalDAV-kalender). Går inte att skapa events på skrivskyddade
 kalendrar (t.ex. vissa Google-prenumerationer) — då misslyckas sparandet

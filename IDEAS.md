@@ -185,6 +185,21 @@ meningsfull. Kräver att källkalendern (t.ex. cal_combiners egen
 kalender, sedan 0.0.18) faktiskt hanterar `rrule` på update också, inte
 bara vid create.
 
+**Känd begränsning, bekräftad av verklig testning:** gäller bara
+händelser som redan hör hemma direkt på `calendar_entity` (cal_combiners
+egen kalender, om det är en sammanslagen kalender). En händelse som
+istället kommer från en av cal_combiners *källkalendrar* (importerad/
+synkad, t.ex. Google eller en ICS-länk) vidarebefordras till den källan
+vid redigering - en källa utan stöd för att lägga till upprepning i
+efterhand kan då tyst strunta i `rrule` utan felmeddelande (till
+skillnad från när källan helt saknar redigeringsstöd, som ger ett
+tydligt fel). Card kan idag inte skilja "eget event" från "källevent" i
+UI:t för att varna i förväg - hint-texten i dialogen förklarar det
+istället. Möjlig framtida förbättring: låta kortet läsa av
+merge-uid-prefixet (`__own__::` i cal_combiner) för att visa en tydlig
+varning eller dölja fältet helt för källevent, istället för att bara
+förklara det i text.
+
 ## Flerspråksstöd
 Likt pollen pump-integrationen: göra UI-texterna (Idag, Veckoschema,
 Dela, etc.) språkstyrda istället för hårdkodad svenska, om kortet

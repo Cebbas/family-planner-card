@@ -329,17 +329,26 @@ vanligt klick (utan att dra) väljer bara dagen som vanligt och visar en
 
 ### Upprepning
 
-Vid en ny händelse (inte vid redigering av en befintlig) kan du sätta
-**Upprepning** till Vecka eller Månad, plus ett eget intervall — "Var
-[N]:e vecka/månad", t.ex. `6` för var 6:e vecka — och hur många
-tillfällen serien ska ha. Sparas som en riktig återkommande serie (ett
-RFC5545-`rrule`, samma sak en vanlig kalenderapp skulle skapa) via
-websocket-kommandot `calendar/event/create` — **inte** en tjänst som
-`calendar.create_event`, som saknar stöd för `rrule` helt. Kalendern
-lagrar alltså en enda återkommande post, inte N separata händelser.
-Stöds av bl.a. CalDAV-kalendrar och HA:s inbyggda lokala kalender; en
-kalenderintegration utan stöd för upprepning ger ett tydligt
-felmeddelande vid sparande istället för att tyst misslyckas.
+Vid en ny händelse — och även när du redigerar en redan skapad, enskild
+händelse — kan du sätta **Upprepning** till Vecka eller Månad, plus ett
+eget intervall — "Var [N]:e vecka/månad", t.ex. `6` för var 6:e vecka —
+och hur många tillfällen serien ska ha. Sparas som en riktig
+återkommande serie (ett RFC5545-`rrule`, samma sak en vanlig
+kalenderapp skulle skapa) via websocket-kommandot
+`calendar/event/create` respektive `calendar/event/update` — **inte**
+en tjänst som `calendar.create_event`, som saknar stöd för `rrule`
+helt. Kalendern lagrar alltså en enda återkommande post, inte N
+separata händelser, oavsett om serien skapades direkt eller lades till
+i efterhand. Stöds av bl.a. CalDAV-kalendrar, cal_combiners egen
+kalender och HA:s inbyggda lokala kalender; en kalenderintegration utan
+stöd för upprepning ger ett tydligt felmeddelande vid sparande istället
+för att tyst misslyckas.
+
+Upprepningsfältet visas inte när du redigerar ett enstaka tillfälle i
+en redan befintlig serie (t.ex. en enskild vecka du öppnat via
+veckoschemat/månadskalendern) — där gäller ändringen bara det
+tillfället (`recurrence_id`), och en ny toppnivå-upprepning skulle inte
+vara meningsfull.
 
 Kräver att `calendar_entity` pekar på en kalender med skrivstöd (t.ex.
 en lokal CalDAV-kalender). Går inte att skapa events på skrivskyddade

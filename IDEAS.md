@@ -176,6 +176,15 @@ websocket-kommandot `calendar/event/create`, inte tjänsten
 `calendar.create_event` som saknar `rrule`-stöd), dvs en enda
 återkommande post i kalendern istället för flera separata händelser.
 
+✅ Klar (även vid redigering). En redan skapad, enskild händelse kan i
+efterhand göras återkommande via samma upprepningsfält i redigera-
+dialogen (skickas med som `rrule` i `calendar/event/update`) - döljs
+bara när man redigerar ett enstaka tillfälle i en redan befintlig serie
+(`recurrenceId` satt), där en ny toppnivå-upprepning inte är
+meningsfull. Kräver att källkalendern (t.ex. cal_combiners egen
+kalender, sedan 0.0.18) faktiskt hanterar `rrule` på update också, inte
+bara vid create.
+
 ## Flerspråksstöd
 Likt pollen pump-integrationen: göra UI-texterna (Idag, Veckoschema,
 Dela, etc.) språkstyrda istället för hårdkodad svenska, om kortet

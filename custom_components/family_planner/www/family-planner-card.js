@@ -2784,7 +2784,13 @@ class FamilyPlannerCard extends HTMLElement {
             : ""
         }
         ${
-          isEdit
+          // Att lägga till/ändra upprepning stöds vid redigering också
+          // (inte bara för nya händelser) - så länge man inte redigerar
+          // ett enstaka tillfälle i en redan befintlig serie (recurrenceId
+          // satt), där en ny toppnivå-upprepning inte skulle vara
+          // meningsfull. En vanlig, tidigare skapad enskild händelse kan
+          // alltså i efterhand göras återkommande.
+          ce.recurrenceId
             ? ""
             : `
         <div class="fpc-create-field">
@@ -2813,8 +2819,12 @@ class FamilyPlannerCard extends HTMLElement {
             </div>
           </div>
           <div class="fpc-create-hint">
-            Skapas som en riktig återkommande serie, inte enskilda händelser
-            (stöds av bl.a. CalDAV och HA:s inbyggda lokala kalender) - vissa
+            ${
+              isEdit
+                ? "Gör om händelsen till en riktig återkommande serie med start från detta tillfälle, istället för enskilda händelser."
+                : "Skapas som en riktig återkommande serie, inte enskilda händelser."
+            }
+            Stöds av bl.a. CalDAV och HA:s inbyggda lokala kalender - vissa
             kalenderintegrationer kan sakna stöd för upprepning, då visas ett
             felmeddelande vid sparande.
           </div>

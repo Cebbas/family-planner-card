@@ -323,10 +323,23 @@ kalendrar oavsett filter.
 
 Dra över flera dagar i rutnätet (håll ner och dra) för att öppna ett litet
 formulär där du skriver en titel och väljer vilken kalender (person eller
-delad) händelsen ska läggas på — sparas som en heldagshändelse via
-`calendar.create_event`. Ett vanligt klick (utan att dra) väljer bara
-dagen som vanligt och visar en "+ Lägg till händelse"-knapp för att skapa
-en enskild dag på samma sätt.
+delad) händelsen ska läggas på — sparas som en heldagshändelse. Ett
+vanligt klick (utan att dra) väljer bara dagen som vanligt och visar en
+"+ Lägg till händelse"-knapp för att skapa en enskild dag på samma sätt.
+
+### Upprepning
+
+Vid en ny händelse (inte vid redigering av en befintlig) kan du sätta
+**Upprepning** till Vecka eller Månad, plus ett eget intervall — "Var
+[N]:e vecka/månad", t.ex. `6` för var 6:e vecka — och hur många
+tillfällen serien ska ha. Sparas som en riktig återkommande serie (ett
+RFC5545-`rrule`, samma sak en vanlig kalenderapp skulle skapa) via
+websocket-kommandot `calendar/event/create` — **inte** en tjänst som
+`calendar.create_event`, som saknar stöd för `rrule` helt. Kalendern
+lagrar alltså en enda återkommande post, inte N separata händelser.
+Stöds av bl.a. CalDAV-kalendrar och HA:s inbyggda lokala kalender; en
+kalenderintegration utan stöd för upprepning ger ett tydligt
+felmeddelande vid sparande istället för att tyst misslyckas.
 
 Kräver att `calendar_entity` pekar på en kalender med skrivstöd (t.ex.
 en lokal CalDAV-kalender). Går inte att skapa events på skrivskyddade

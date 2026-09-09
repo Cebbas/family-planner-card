@@ -1237,6 +1237,10 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-create-image-btn:disabled { opacity: 0.6; cursor: default; }
         .fpc-create-row { display: flex; gap: 8px; }
         .fpc-create-row .fpc-create-field { flex: 1; min-width: 0; }
+        .fpc-create-interval-row {
+          display: flex; align-items: center; gap: 6px; font-size: 0.92em; white-space: nowrap;
+        }
+        .fpc-create-interval-row input { width: 56px !important; flex: 0 0 auto !important; }
         .fpc-create-checkbox-row {
           display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 0.92em;
         }
@@ -1918,6 +1922,7 @@ class FamilyPlannerCard extends HTMLElement {
       startTime: "18:00",
       endTime: "19:00",
       repeat: "never",
+      repeatInterval: 1,
       repeatCount: 4,
       location: "",
       description: "",
@@ -1935,11 +1940,12 @@ class FamilyPlannerCard extends HTMLElement {
   // WEBSOCKET_EVENT_SCHEMA, och både CalDAV- och den inbyggda
   // local_calendar-integrationen skickar det vidare till kalendern -
   // andra integrationers stöd kan variera.
-  _buildRRule(repeat, count) {
+  _buildRRule(repeat, interval, count) {
     const freq = repeat === "monthly" ? "MONTHLY" : "WEEKLY";
-    const interval = repeat === "biweekly" ? ";INTERVAL=2" : "";
+    const safeInterval = Math.max(1, Number(interval) || 1);
+    const intervalPart = safeInterval > 1 ? `;INTERVAL=${safeInterval}` : "";
     const safeCount = Math.max(2, Number(count) || 2);
-    return `FREQ=${freq}${interval};COUNT=${safeCount}`;
+    return `FREQ=${freq}${intervalPart};COUNT=${safeCount}`;
   }
 
   // Bygger event-objektet för calendar/event/create utifrån dialogens
@@ -1962,7 +1968,7 @@ class FamilyPlannerCard extends HTMLElement {
       event.dtend = `${ce.endIso}T${ce.endTime}:00`;
     }
     if (ce.repeat !== "never") {
-      event.rrule = this._buildRRule(ce.repeat, ce.repeatCount);
+      event.rrule = this._buildRRule(ce.repeat, ce.repeatInterval, ce.repeatCount);
     }
     return event;
   }
@@ -2639,6 +2645,7 @@ class FamilyPlannerCard extends HTMLElement {
       startTime,
       endTime,
       repeat: "never",
+      repeatInterval: 1,
       repeatCount: 4,
       location: ev.location || "",
       description: ev.description || "",
@@ -2784,22 +2791,32 @@ class FamilyPlannerCard extends HTMLElement {
           <label class="fpc-create-field-label">Upprepning</label>
           <select id="fpc-ce-repeat">
             <option value="never"${ce.repeat === "never" ? " selected" : ""}>Aldrig</option>
-            <option value="weekly"${ce.repeat === "weekly" ? " selected" : ""}>Varje vecka</option>
-            <option value="biweekly"${ce.repeat === "biweekly" ? " selected" : ""}>Varannan vecka</option>
-            <option value="monthly"${ce.repeat === "monthly" ? " selected" : ""}>Varje månad</option>
+            <option value="weekly"${ce.repeat === "weekly" ? " selected" : ""}>Vecka</option>
+            <option value="monthly"${ce.repeat === "monthly" ? " selected" : ""}>Månad</option>
           </select>
         </div>
         ${
           ce.repeat !== "never"
             ? `
-          <div class="fpc-create-field">
-            <label class="fpc-create-field-label">Antal tillfällen</label>
-            <input type="number" id="fpc-ce-repeat-count" min="2" max="52" value="${ce.repeatCount}" />
+          <div class="fpc-create-row">
+            <div class="fpc-create-field">
+              <label class="fpc-create-field-label">Intervall</label>
+              <div class="fpc-create-interval-row">
+                <span>Var</span>
+                <input type="number" id="fpc-ce-repeat-interval" min="1" max="52" value="${ce.repeatInterval}" />
+                <span>:e ${ce.repeat === "monthly" ? "månad" : "vecka"}</span>
+              </div>
+            </div>
+            <div class="fpc-create-field">
+              <label class="fpc-create-field-label">Antal tillfällen</label>
+              <input type="number" id="fpc-ce-repeat-count" min="2" max="52" value="${ce.repeatCount}" />
+            </div>
           </div>
           <div class="fpc-create-hint">
-            Skapas som en riktig återkommande serie (stöds av bl.a. CalDAV
-            och HA:s inbyggda lokala kalender) - vissa kalenderintegrationer
-            kan sakna stöd för upprepning, då visas ett felmeddelande vid sparande.
+            Skapas som en riktig återkommande serie, inte enskilda händelser
+            (stöds av bl.a. CalDAV och HA:s inbyggda lokala kalender) - vissa
+            kalenderintegrationer kan sakna stöd för upprepning, då visas ett
+            felmeddelande vid sparande.
           </div>
         `
             : ""
@@ -2862,6 +2879,12 @@ class FamilyPlannerCard extends HTMLElement {
       repeatInput.addEventListener("change", (ev) => {
         this._creatingEvent.repeat = ev.target.value;
         this._syncCreateEventDialog(true);
+      });
+    }
+    const repeatIntervalInput = dialog.querySelector("#fpc-ce-repeat-interval");
+    if (repeatIntervalInput) {
+      repeatIntervalInput.addEventListener("change", (ev) => {
+        this._creatingEvent.repeatInterval = Math.max(1, Number(ev.target.value) || 1);
       });
     }
     const repeatCountInput = dialog.querySelector("#fpc-ce-repeat-count");

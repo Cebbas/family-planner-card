@@ -169,9 +169,12 @@ månadskalendern, t.ex. en liten "!"-ikon på dagen. Kräver att jämföra
 start/slut-tider mellan alla events för samma person samma datum.
 
 ## Upprepade händelser i skapa-formuläret
-Ett "upprepas varje vecka"-kryssruta i drag-skapa-formuläret, så man
-slipper lägga in återkommande saker (t.ex. varje måndags fotbollsträning)
-en och en. `calendar.create_event` stöder recurrence via `rrule`.
+✅ Klar. Ny händelse kan sättas till "Vecka"/"Månad" plus ett eget
+intervall ("Var N:e vecka/månad", t.ex. var 6:e vecka) och antal
+tillfällen - sparas som en riktig återkommande serie (`rrule` via
+websocket-kommandot `calendar/event/create`, inte tjänsten
+`calendar.create_event` som saknar `rrule`-stöd), dvs en enda
+återkommande post i kalendern istället för flera separata händelser.
 
 ## Flerspråksstöd
 Likt pollen pump-integrationen: göra UI-texterna (Idag, Veckoschema,

@@ -102,6 +102,7 @@ class FamilyPlannerPanel extends HTMLElement {
     this._saving = false;
     this._saveError = false;
     this._activeTab = "general";
+    this._haUsers = [];
   }
 
   set hass(hass) {
@@ -179,6 +180,17 @@ class FamilyPlannerPanel extends HTMLElement {
       }
     } catch (err) {
       // Inget sparat än - kör med tomt startläge.
+    }
+    // HA-kontolistan för "Koppla till HA-konto"-väljaren i personkortet
+    // (se _mkUserPicker) - kräver adminrättigheter, så en icke-admin som
+    // öppnar panelen (require_admin=False) faller tyst tillbaka på ett
+    // textfält istället (samma mönster som _mkEntityPicker vid saknad
+    // ha-entity-picker).
+    try {
+      const users = await this._hass.callWS({ type: "config/auth/list" });
+      this._haUsers = Array.isArray(users) ? users : [];
+    } catch (err) {
+      this._haUsers = [];
     }
     this._render();
   }
@@ -482,6 +494,106 @@ class FamilyPlannerPanel extends HTMLElement {
     return input;
   }
 
+  // HA-kontoväljare för "Koppla till HA-konto" i personkortet - styr vem
+  // jobbkalendrarna (_workCalendarsList) visas för i kortet, se
+  // _calendarSources() i family-planner-card.js. Faller tillbaka på ett
+  // textfält om kontolistan inte kunde hämtas (t.ex. icke-admin, se _load).
+  _mkUserPicker(value, onChange) {
+    const users = this._haUsers || [];
+    if (users.length === 0) {
+      return this._textInput(value, "user_id", onChange);
+    }
+    const select = document.createElement("select");
+    select.style.flex = "1";
+    const noneOpt = document.createElement("option");
+    noneOpt.value = "";
+    noneOpt.textContent = "(ingen koppling)";
+    select.appendChild(noneOpt);
+    let matched = !value;
+    users.forEach((u) => {
+      const opt = document.createElement("option");
+      opt.value = u.id;
+      opt.textContent = u.name || u.id;
+      if (u.id === value) {
+        opt.selected = true;
+        matched = true;
+      }
+      select.appendChild(opt);
+    });
+    if (value && !matched) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = `${value} (okänt konto)`;
+      opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", (ev) => onChange(ev.target.value));
+    return select;
+  }
+
+  // Nästlad lista med jobbkalendrar för en person - varje kalender är
+  // bara synlig i kortet för det HA-konto som kopplats ovan (ha_user_id),
+  // aldrig för andra som loggar in på samma HA-instans.
+  _workCalendarsList(p, idx) {
+    const wrap = document.createElement("div");
+    const label = document.createElement("div");
+    label.className = "fpp-label";
+    label.textContent =
+      "Jobbkalendrar (privata - syns bara i kortet för det HA-konto som är kopplat ovan)";
+    wrap.appendChild(label);
+
+    (p.work_calendars || []).forEach((w, wIdx) => {
+      const entityField = this._mkEntityPicker(
+        w.entity,
+        (val) => {
+          const list = [...(this._data.persons[idx].work_calendars || [])];
+          list[wIdx] = { ...list[wIdx], entity: val };
+          this._data.persons[idx] = { ...this._data.persons[idx], work_calendars: list };
+          this._markDirty();
+        },
+        "calendar.jobb",
+        ["calendar"]
+      );
+      const nameInput = this._textInput(
+        w.name,
+        "Namn, t.ex. Jobb",
+        (val) => {
+          const list = [...(this._data.persons[idx].work_calendars || [])];
+          list[wIdx] = { ...list[wIdx], name: val };
+          this._data.persons[idx] = { ...this._data.persons[idx], work_calendars: list };
+          this._markDirty();
+        },
+        "140px"
+      );
+      const colorInput = this._colorInput(w.color, "#03a9f4", (val) => {
+        const list = [...(this._data.persons[idx].work_calendars || [])];
+        list[wIdx] = { ...list[wIdx], color: val };
+        this._data.persons[idx] = { ...this._data.persons[idx], work_calendars: list };
+        this._markDirty();
+      });
+      const removeBtn = this._removeBtn(() => {
+        const list = (this._data.persons[idx].work_calendars || []).filter((_, i) => i !== wIdx);
+        this._data.persons[idx] = { ...this._data.persons[idx], work_calendars: list };
+        this._markDirty();
+        this._render();
+      });
+      wrap.appendChild(this._row([entityField, nameInput, colorInput, removeBtn]));
+    });
+
+    wrap.appendChild(
+      this._addBtn("+ Lägg till jobbkalender", () => {
+        const list = [
+          ...(this._data.persons[idx].work_calendars || []),
+          { entity: "", name: "", color: "" },
+        ];
+        this._data.persons[idx] = { ...this._data.persons[idx], work_calendars: list };
+        this._markDirty();
+        this._render();
+      })
+    );
+    return wrap;
+  }
+
   // Nästlad lista med "idag"-sensorer för en person.
   _personEntitiesList(p, idx) {
     const wrap = document.createElement("div");
@@ -605,6 +717,16 @@ class FamilyPlannerPanel extends HTMLElement {
       }, null, ["calendar"])
     );
 
+    const userField = document.createElement("div");
+    userField.className = "fpp-field";
+    userField.innerHTML = `<div class="fpp-label">Koppla till HA-konto (valfri - styr vem jobbkalendrarna nedan visas för)</div>`;
+    userField.appendChild(
+      this._mkUserPicker(p.ha_user_id, (val) => {
+        this._data.persons[idx] = { ...this._data.persons[idx], ha_user_id: val || null };
+        this._markDirty();
+      })
+    );
+
     const removeBtn = this._removeBtn(() => {
       this._data.persons = this._data.persons.filter((_, i) => i !== idx);
       this._markDirty();
@@ -624,6 +746,8 @@ class FamilyPlannerPanel extends HTMLElement {
     card.appendChild(this._row([personEntityField]));
     card.appendChild(this._personEntitiesList(p, idx));
     card.appendChild(this._row([calField]));
+    card.appendChild(this._row([userField]));
+    card.appendChild(this._workCalendarsList(p, idx));
     card.appendChild(this._row([iconInput, colorInput]));
 
     const kwLabel = document.createElement("div");

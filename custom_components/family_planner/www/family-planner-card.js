@@ -39,6 +39,8 @@
 
 const DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 const DAY_LABELS = ["Mån", "Tis", "Ons", "Tor", "Fre", "Lör", "Sön"];
+// Hur många dagar framåt profilvyns agenda (klick på en persons namn) visar.
+const PROFILE_DAYS_AHEAD = 21;
 
 function daysUntil(dateStr) {
   if (!dateStr) return null;
@@ -305,6 +307,16 @@ function joinEventImage(description, image) {
   return base ? `${base}\n\n[fpc-image]:${image}` : `[fpc-image]:${image}`;
 }
 
+const VALID_SECTIONS = ["all", "today", "week", "month"];
+
+// "section" i kortets YAML (valfritt, default "all") - låter dig lägga
+// till kortet flera gånger på samma dashboard och bara visa en del i
+// varje, t.ex. en "Idag"-widget för sig och en separat "Veckoschema".
+// Alla instanser delar ändå samma konfiguration/data från sidopanelen.
+function normalizeSection(section) {
+  return VALID_SECTIONS.includes(section) ? section : "all";
+}
+
 function fpcEsc(str) {
   return String(str == null ? "" : str)
     .replace(/&/g, "&amp;")
@@ -333,6 +345,9 @@ class FamilyPlannerCard extends HTMLElement {
     this._creatingEvent = null; // { startIso, endIso, targetEntity }
     this._creatingEventRenderedFor = null;
     this._hiddenEventKeys = new Set(); // "entity_id|uid" - se _maybeFetchHiddenEvents
+    this._profilePersonIdx = null; // index i cfg.persons - se _openProfile/_syncProfileDialog
+    this._profileEvents = null;
+    this._profileLoading = false;
   }
 
   // Delas mellan lokal YAML-parsning och delad konfiguration från
@@ -349,6 +364,24 @@ class FamilyPlannerCard extends HTMLElement {
         icon: p.icon || "mdi:account",
         color: p.color || null,
         icon_keywords: normalizeIconKeywords(p.icon_keywords),
+        // Kopplar personen till ett HA-konto - jobbkalendrarna nedan visas
+        // bara i kortet när hass.user.id matchar, se _calendarSources().
+        ha_user_id: p.ha_user_id || null,
+        work_calendars: this._normalizeWorkCalendars(p.work_calendars),
+      }));
+  }
+
+  // Privata kalendrar (t.ex. jobbschema) som bara ska synas för den
+  // inloggade personen själv - filtreras på hass.user.id mot persons[].
+  // ha_user_id i _calendarSources(), inte här (normalisering körs oavsett
+  // vem som tittar).
+  _normalizeWorkCalendars(list) {
+    return (Array.isArray(list) ? list : [])
+      .filter((w) => w && w.entity)
+      .map((w) => ({
+        entity: w.entity,
+        name: w.name || w.entity,
+        color: w.color || "var(--primary-color)",
       }));
   }
 
@@ -401,15 +434,31 @@ class FamilyPlannerCard extends HTMLElement {
     if (!config) {
       throw new Error("Ingen konfiguration angiven");
     }
-    // Kortet har ingen egen konfiguration - allt hämtas från sidopanelen
-    // "Familjeplanering" (se _maybeLoadSharedConfig) så att alla kort på
-    // instansen alltid visar samma familj.
+    // Kortet har i övrigt ingen egen konfiguration - allt hämtas från
+    // sidopanelen "Familjeplanering" (se _maybeLoadSharedConfig) så att
+    // alla kort på instansen alltid visar samma familj. Enda undantaget
+    // är "section" - valfri, per kortinstans, se normalizeSection() -
+    // som gör det möjligt att lägga till kortet flera gånger och bara
+    // visa en del (Idag/Veckoschema/Månadskalender) i varje.
+    this._section = normalizeSection(config.section);
     this._config = this._defaultConfig();
     this._collapsed = false;
     this._collapsedInitialized = false;
     this._sharedConfigCache = null;
     this._built = false;
     this._render();
+  }
+
+  _showToday() {
+    return this._section === "all" || this._section === "today";
+  }
+
+  _showWeek() {
+    return this._section === "all" || this._section === "week";
+  }
+
+  _showMonth() {
+    return this._section === "all" || this._section === "month";
   }
 
   set hass(hass) {
@@ -498,7 +547,8 @@ class FamilyPlannerCard extends HTMLElement {
   // Annars skulle döljning aldrig gå att spara på en skrivskyddad kalender,
   // trots att den inte rör kalenderns faktiska innehåll alls.
   async _maybeFetchHiddenEvents() {
-    if (!this._hass) return;
+    // Bara relevant för veckoschemat/månadskalendern - inte Idag-vyn.
+    if (!this._hass || (!this._showWeek() && !this._showMonth())) return;
     if (this._hiddenEventsLoading) return;
     const cache = this._hiddenEventsCache;
     if (cache && Date.now() - cache.fetchedAt < 60 * 1000) return;
@@ -542,6 +592,9 @@ class FamilyPlannerCard extends HTMLElement {
   // ett barn i Idag-vyn medan de är borta, se _isPersonAwayNow().
   async _maybeFetchAwayStatus() {
     const cfg = this._config;
+    // Används av Idag-vyns "borta"-toning och veckoschemats "Kommer hem" -
+    // inte månadskalendern (som har sin egen separat hämtade markering).
+    if (!this._showToday() && !this._showWeek()) return;
     const awayCals = (cfg && cfg.away_calendars) || [];
     if (awayCals.length === 0 || !this._hass) return;
     const cache = this._awayEventsCache;
@@ -636,6 +689,26 @@ class FamilyPlannerCard extends HTMLElement {
         isAway: true,
         iconKeywords: [],
       }));
+    // Jobbkalendrar - bara medtagna (och därmed bara hämtade/synliga)
+    // för den person vars kopplade HA-konto (ha_user_id) matchar den
+    // faktiskt inloggade användaren i den här webbläsarsessionen. Andra
+    // familjemedlemmars jobbkalendrar finns aldrig med i sources när
+    // någon annan är inloggad - inte ens gömda, de begärs inte ens.
+    const currentUserId = this._hass && this._hass.user ? this._hass.user.id : null;
+    const workSources = cfg.persons
+      .map((p, idx) => ({ p, idx }))
+      .filter(({ p }) => p.ha_user_id && currentUserId === p.ha_user_id)
+      .flatMap(({ p, idx }) =>
+        (p.work_calendars || []).map((w, wIdx) => ({
+          key: `work:${idx}:${wIdx}`,
+          name: w.name,
+          color: w.color,
+          calendar_entity: w.entity,
+          personIdxs: [idx],
+          isAway: false,
+          iconKeywords: this._iconKeywordsFor(p),
+        }))
+      );
     const sharedSources = (cfg.calendars || []).map((c) => ({
       key: `cal:${c.entity}`,
       name: c.name,
@@ -651,7 +724,7 @@ class FamilyPlannerCard extends HTMLElement {
       isAway: false,
       iconKeywords: cfg.icon_keywords,
     }));
-    return [...personSources, ...awaySources, ...sharedSources];
+    return [...personSources, ...workSources, ...awaySources, ...sharedSources];
   }
 
   // Måndagen i den vecka som just nu visas i veckoschemat - innevarande
@@ -680,7 +753,7 @@ class FamilyPlannerCard extends HTMLElement {
 
   async _maybeFetchMonthEvents() {
     const cfg = this._config;
-    if (!cfg || !cfg.show_month_calendar || !this._hass) return;
+    if (!cfg || !this._showMonth() || !cfg.show_month_calendar || !this._hass) return;
     const sources = this._calendarSources();
     if (sources.length === 0) return;
 
@@ -708,7 +781,7 @@ class FamilyPlannerCard extends HTMLElement {
 
   async _maybeFetchWeekEvents() {
     const cfg = this._config;
-    if (!cfg || !this._hass) return;
+    if (!cfg || !this._showWeek() || !this._hass) return;
     const sources = this._calendarSources();
     if (sources.length === 0) return;
 
@@ -733,7 +806,7 @@ class FamilyPlannerCard extends HTMLElement {
 
   async _maybeFetchForecast() {
     const cfg = this._config;
-    if (!cfg || !cfg.weather || !cfg.weather.show_week || !this._hass) return;
+    if (!cfg || !this._showWeek() || !cfg.weather || !cfg.weather.show_week || !this._hass) return;
     const entityId = cfg.weather.entity;
     const cache = this._forecastCache;
     const fresh = cache && cache.entity === entityId && Date.now() - cache.fetchedAt < 20 * 60 * 1000;
@@ -764,6 +837,9 @@ class FamilyPlannerCard extends HTMLElement {
     const cfg = this._config;
     const persons = cfg ? cfg.persons.length : 1;
     const sharedRow = cfg && cfg.calendars && cfg.calendars.length > 0 ? 1 : 0;
+    if (this._section === "today") return 2 + persons;
+    if (this._section === "week") return 2 + persons + sharedRow;
+    if (this._section === "month") return 8;
     return 3 + persons + sharedRow;
   }
 
@@ -804,10 +880,13 @@ class FamilyPlannerCard extends HTMLElement {
 
   // Avatar ovanför namn, som en liten vertikal identitets-block - samma
   // markup i Idag-vyns personrader och veckoschemats radhuvud, se ovan.
-  _personIdentityHtml(p) {
+  // Klickbar (data-person-idx) om idx anges - öppnar profilvyn med
+  // personens fulla schema, se _openProfile/_syncProfileDialog.
+  _personIdentityHtml(p, idx) {
     const { name } = this._personDisplay(p);
+    const clickable = idx !== undefined && idx !== null;
     return `
-      <div class="fpc-person-identity">
+      <div class="fpc-person-identity${clickable ? " fpc-person-identity-clickable" : ""}"${clickable ? ` data-person-idx="${idx}"` : ""}>
         ${this._personAvatarHtml(p)}
         <div class="fpc-person-name">${fpcEsc(name)}</div>
       </div>
@@ -890,6 +969,8 @@ class FamilyPlannerCard extends HTMLElement {
           display: flex; flex-direction: column; align-items: center;
           gap: 4px; flex-shrink: 0;
         }
+        .fpc-person-identity-clickable { cursor: pointer; }
+        .fpc-person-identity-clickable:hover .fpc-person-name { text-decoration: underline; }
         .fpc-avatar {
           width: 36px; height: 36px; border-radius: 50%;
           display: flex; align-items: center; justify-content: center;
@@ -1177,12 +1258,45 @@ class FamilyPlannerCard extends HTMLElement {
           color: var(--error-color, #db4437); flex: 0 0 auto !important; padding: 8px 12px !important;
         }
         .fpc-create-delete:disabled { opacity: 0.5; cursor: default; }
+        .fpc-profile-dialog { max-width: 420px; max-height: 80vh; }
+        .fpc-profile-dialog-inner { display: flex; flex-direction: column; max-height: calc(80vh - 32px); }
+        .fpc-profile-dialog-header {
+          display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-shrink: 0;
+        }
+        .fpc-profile-dialog-title { font-weight: 500; font-size: 1.1em; }
+        .fpc-profile-dialog-body { overflow-y: auto; flex: 1; margin: -2px 0 12px 0; }
+        .fpc-profile-loading, .fpc-profile-empty {
+          color: var(--secondary-text-color); font-size: 0.9em; font-style: italic; padding: 8px 0;
+        }
+        .fpc-profile-day { margin-bottom: 12px; }
+        .fpc-profile-day-label {
+          font-size: 0.8em; font-weight: 500; color: var(--secondary-text-color);
+          margin-bottom: 4px; text-transform: uppercase;
+        }
+        .fpc-profile-day-today .fpc-profile-day-label { color: var(--primary-color); }
+        .fpc-profile-event {
+          display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 0.92em;
+        }
+        .fpc-profile-event-time {
+          flex-shrink: 0; width: 46px; color: var(--secondary-text-color); font-size: 0.85em;
+        }
+        .fpc-profile-event-text { min-width: 0; overflow-wrap: break-word; }
       </style>
     `;
+
+    const showToday = this._showToday();
+    const showWeek = this._showWeek();
+    const showMonth = this._showMonth();
+    // Sektioner har normalt ett övre margin/border som avstånd till
+    // föregående sektion - ful som topp-luft när sektionen är den enda
+    // (eller allra första) synliga i ett kort som bara visar en del.
+    const weekNoTopSpace = !showToday;
+    const monthNoTopSpace = !showToday && !showWeek;
 
     this.shadowRoot.innerHTML = `
       ${style}
       <ha-card class="fpc">
+        ${showToday ? `
         <div class="fpc-countdowns" id="fpc-countdowns"></div>
         <div class="fpc-weather-row" id="fpc-weather"></div>
         <div class="fpc-header" id="fpc-header">
@@ -1199,7 +1313,9 @@ class FamilyPlannerCard extends HTMLElement {
           <div id="fpc-persons"></div>
           <div class="fpc-general-row" id="fpc-general"></div>
         </div>
-        <div class="fpc-week">
+        ` : ""}
+        ${showWeek ? `
+        <div class="fpc-week"${weekNoTopSpace ? ' style="margin-top:0;padding-top:0;border-top:none;"' : ""}>
           <div class="fpc-week-header-row">
             <div class="fpc-week-nav-group">
               <button class="fpc-month-nav" id="fpc-week-prev">‹</button>
@@ -1210,7 +1326,9 @@ class FamilyPlannerCard extends HTMLElement {
           </div>
           <table class="fpc-table" id="fpc-table"></table>
         </div>
-        <div class="fpc-month" id="fpc-month-section">
+        ` : ""}
+        ${showMonth ? `
+        <div class="fpc-month" id="fpc-month-section"${monthNoTopSpace ? ' style="margin-top:0;padding-top:0;border-top:none;"' : ""}>
           <div class="fpc-month-header">
             <button class="fpc-month-nav" id="fpc-month-prev">‹</button>
             <div class="fpc-month-title" id="fpc-month-title"></div>
@@ -1223,65 +1341,91 @@ class FamilyPlannerCard extends HTMLElement {
           <div class="fpc-month-grid" id="fpc-month-grid"></div>
           <div class="fpc-month-daydetail" id="fpc-month-daydetail"></div>
         </div>
+        ` : ""}
       </ha-card>
       <dialog class="fpc-create-dialog" id="fpc-create-dialog"></dialog>
+      <dialog class="fpc-create-dialog fpc-profile-dialog" id="fpc-profile-dialog"></dialog>
     `;
 
-    this.shadowRoot.querySelector("#fpc-header").addEventListener("click", () => {
-      this._collapsed = !this._collapsed;
-      this.shadowRoot.querySelector("#fpc-today").classList.toggle("collapsed", this._collapsed);
-      this.shadowRoot.querySelector("#fpc-toggle").classList.toggle("collapsed", this._collapsed);
-    });
+    const headerEl = this.shadowRoot.querySelector("#fpc-header");
+    if (headerEl) {
+      headerEl.addEventListener("click", () => {
+        this._collapsed = !this._collapsed;
+        this.shadowRoot.querySelector("#fpc-today").classList.toggle("collapsed", this._collapsed);
+        this.shadowRoot.querySelector("#fpc-toggle").classList.toggle("collapsed", this._collapsed);
+      });
+    }
 
-    this.shadowRoot.querySelector("#fpc-week-prev").addEventListener("click", () => {
-      this._weekViewOffset -= 1;
-      this._maybeFetchWeekEvents();
-      this._update();
-    });
-    this.shadowRoot.querySelector("#fpc-week-next").addEventListener("click", () => {
-      this._weekViewOffset += 1;
-      this._maybeFetchWeekEvents();
-      this._update();
-    });
+    const weekPrevEl = this.shadowRoot.querySelector("#fpc-week-prev");
+    if (weekPrevEl) {
+      weekPrevEl.addEventListener("click", () => {
+        this._weekViewOffset -= 1;
+        this._maybeFetchWeekEvents();
+        this._update();
+      });
+    }
+    const weekNextEl = this.shadowRoot.querySelector("#fpc-week-next");
+    if (weekNextEl) {
+      weekNextEl.addEventListener("click", () => {
+        this._weekViewOffset += 1;
+        this._maybeFetchWeekEvents();
+        this._update();
+      });
+    }
 
-    this.shadowRoot.querySelector("#fpc-month-prev").addEventListener("click", () => {
-      this._calendarViewMonth = new Date(
-        this._calendarViewMonth.getFullYear(),
-        this._calendarViewMonth.getMonth() - 1,
-        1
-      );
-      this._selectedDate = null;
-      this._maybeFetchMonthEvents();
-      this._update();
-    });
-    this.shadowRoot.querySelector("#fpc-month-next").addEventListener("click", () => {
-      this._calendarViewMonth = new Date(
-        this._calendarViewMonth.getFullYear(),
-        this._calendarViewMonth.getMonth() + 1,
-        1
-      );
-      this._selectedDate = null;
-      this._maybeFetchMonthEvents();
-      this._update();
-    });
+    const monthPrevEl = this.shadowRoot.querySelector("#fpc-month-prev");
+    if (monthPrevEl) {
+      monthPrevEl.addEventListener("click", () => {
+        this._calendarViewMonth = new Date(
+          this._calendarViewMonth.getFullYear(),
+          this._calendarViewMonth.getMonth() - 1,
+          1
+        );
+        this._selectedDate = null;
+        this._maybeFetchMonthEvents();
+        this._update();
+      });
+    }
+    const monthNextEl = this.shadowRoot.querySelector("#fpc-month-next");
+    if (monthNextEl) {
+      monthNextEl.addEventListener("click", () => {
+        this._calendarViewMonth = new Date(
+          this._calendarViewMonth.getFullYear(),
+          this._calendarViewMonth.getMonth() + 1,
+          1
+        );
+        this._selectedDate = null;
+        this._maybeFetchMonthEvents();
+        this._update();
+      });
+    }
 
-    this.shadowRoot.querySelector("#fpc-month-today-btn").addEventListener("click", () => {
-      const today = new Date();
-      this._calendarViewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-      this._selectedDate = isoDate(today);
-      this._maybeFetchMonthEvents();
-      this._update();
-    });
+    const monthTodayBtnEl = this.shadowRoot.querySelector("#fpc-month-today-btn");
+    if (monthTodayBtnEl) {
+      monthTodayBtnEl.addEventListener("click", () => {
+        const today = new Date();
+        this._calendarViewMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+        this._selectedDate = isoDate(today);
+        this._maybeFetchMonthEvents();
+        this._update();
+      });
+    }
 
-    this.shadowRoot.querySelector("#fpc-tts-btn").addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      this._speakToday();
-    });
+    const ttsBtnEl = this.shadowRoot.querySelector("#fpc-tts-btn");
+    if (ttsBtnEl) {
+      ttsBtnEl.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this._speakToday();
+      });
+    }
 
-    this.shadowRoot.querySelector("#fpc-share-btn").addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      this._shareWeek();
-    });
+    const shareBtnEl = this.shadowRoot.querySelector("#fpc-share-btn");
+    if (shareBtnEl) {
+      shareBtnEl.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this._shareWeek();
+      });
+    }
 
     // Engångslyssnare på själva <dialog>-elementet (inte dess innehåll,
     // som byggs om vid varje fältändring i _renderCreateEventDialogContent)
@@ -1293,6 +1437,12 @@ class FamilyPlannerCard extends HTMLElement {
       this._creatingEventError = false;
       this._creatingEventImageError = false;
       this._creatingEventImageUploading = false;
+    });
+
+    // Samma mönster som ovan, för profildialogen (barnets/personens fulla
+    // schema) - fångar stängning via Esc-tangenten.
+    this.shadowRoot.querySelector("#fpc-profile-dialog").addEventListener("cancel", () => {
+      this._closeProfile();
     });
 
     // Global pointerup fångar drag-avslut även om man släpper utanför en cell.
@@ -1493,7 +1643,7 @@ class FamilyPlannerCard extends HTMLElement {
       personsEl.innerHTML = `<div class="fpc-general-empty">Inga personer konfigurerade ännu. Öppna sidopanelen "Familjeplanering" för att lägga till familjemedlemmar.</div>`;
     } else if (personsEl) {
       personsEl.innerHTML = cfg.persons
-        .map((p) => {
+        .map((p, idx) => {
           const personIconKeywords = this._iconKeywordsFor(p);
           const lines = this._personTodayLines(p)
             .map((line) => this._renderTodayLine(line, personIconKeywords))
@@ -1507,7 +1657,7 @@ class FamilyPlannerCard extends HTMLElement {
             : "";
           return `
             <div class="fpc-person-row${away ? " fpc-person-away" : ""}">
-              ${this._personIdentityHtml(p)}
+              ${this._personIdentityHtml(p, idx)}
               <div class="fpc-person-info">
                 ${returningLine}
                 <div class="fpc-person-state-row">${lines}</div>
@@ -1516,6 +1666,9 @@ class FamilyPlannerCard extends HTMLElement {
           `;
         })
         .join("");
+      personsEl.querySelectorAll(".fpc-person-identity-clickable[data-person-idx]").forEach((el) => {
+        el.addEventListener("click", () => this._openProfile(Number(el.dataset.personIdx)));
+      });
     }
 
     // Allmän rad - bara sensorer som är "on"
@@ -1650,7 +1803,7 @@ class FamilyPlannerCard extends HTMLElement {
               return renderWeekCell(finalEvents, i === todayIdx, dateIso);
             })
             .join("");
-          return `<tr><td class="fpc-person-col">${this._personIdentityHtml(p)}</td>${cells}</tr>`;
+          return `<tr><td class="fpc-person-col">${this._personIdentityHtml(p, idx)}</td>${cells}</tr>`;
         })
         .join("");
 
@@ -1674,6 +1827,9 @@ class FamilyPlannerCard extends HTMLElement {
           this._creatingEvent = this._editingEventFromCalendarEvent(ev);
           this._updateMonthCalendar();
         });
+      });
+      tableEl.querySelectorAll(".fpc-person-identity-clickable[data-person-idx]").forEach((el) => {
+        el.addEventListener("click", () => this._openProfile(Number(el.dataset.personIdx)));
       });
     }
 
@@ -1998,6 +2154,30 @@ class FamilyPlannerCard extends HTMLElement {
     const todayIso = isoDate(new Date());
     const gridEl = this.shadowRoot.querySelector("#fpc-month-grid");
 
+    // Under en aktiv tryckning/drag (pointerdown->pointerup) får cellernas
+    // DOM-noder INTE byggas om - _update() (och därmed detta) körs på
+    // *varje* hass-uppdatering, dvs potentiellt mitt i en pågående touch.
+    // Om cellen som fingret vidrör då rivs upp och ersätts tappar
+    // webbläsaren sin implicita pointer-capture på den, gör en ny
+    // hit-test och kan träffa en grannruta istället - det var orsaken
+    // till att tryck på ett datum ibland "hoppade" till fel dag. Så
+    // länge rutnätet redan är byggt för aktuell månad räcker det att
+    // bara växla highlight-klassen på befintliga celler.
+    if (this._dragging && gridEl.dataset.builtMonth === `${year}-${month}`) {
+      const dMin = this._dragStart && this._dragEnd
+        ? (this._dragStart < this._dragEnd ? this._dragStart : this._dragEnd)
+        : null;
+      const dMax = this._dragStart && this._dragEnd
+        ? (this._dragStart < this._dragEnd ? this._dragEnd : this._dragStart)
+        : null;
+      gridEl.querySelectorAll(".fpc-month-cell[data-date]").forEach((cell) => {
+        const dIso = cell.getAttribute("data-date");
+        const highlighted = !!(dMin && dIso >= dMin && dIso <= dMax);
+        cell.classList.toggle("fpc-dragging", highlighted);
+      });
+      return;
+    }
+
     const weekdayHeaders = `
       <div class="fpc-month-weekday-row">
         <div class="fpc-month-weeknum-spacer"></div>
@@ -2087,6 +2267,7 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     gridEl.innerHTML = weekdayHeaders + weeksHtml;
+    gridEl.dataset.builtMonth = `${year}-${month}`;
     gridEl.querySelectorAll(".fpc-month-cell").forEach((cell) => {
       const dIso = cell.getAttribute("data-date");
       cell.addEventListener("pointerdown", (ev) => {
@@ -2300,6 +2481,125 @@ class FamilyPlannerCard extends HTMLElement {
         this._updateMonthCalendar();
       });
     });
+  }
+
+  // Profilvyn - klick på en persons namn/avatar (Idag-raden eller
+  // veckoschemats radhuvud, se _personIdentityHtml) öppnar en dialog med
+  // personens fulla schema de kommande veckorna, byggt av samma källor
+  // (_calendarSources) som redan driver vecko-/månadsvyn - inklusive
+  // ev. jobbkalender, som där redan är filtrerad på inloggad användare.
+  _openProfile(idx) {
+    if (!this._config || !this._config.persons[idx]) return;
+    this._profilePersonIdx = idx;
+    this._profileEvents = null;
+    this._profileLoading = true;
+    this._syncProfileDialog(true);
+    this._fetchProfileEvents(idx);
+  }
+
+  _closeProfile() {
+    this._profilePersonIdx = null;
+    this._profileEvents = null;
+    this._profileLoading = false;
+    this._syncProfileDialog();
+  }
+
+  async _fetchProfileEvents(idx) {
+    const sources = this._calendarSources().filter((s) => s.personIdxs.includes(idx));
+    const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const end = new Date(today.getFullYear(), today.getMonth(), today.getDate() + PROFILE_DAYS_AHEAD);
+    const data = entityIds.length > 0 ? await this._fetchCalendarEvents(entityIds, start, end) : {};
+    // Dialogen kan ha stängts eller bytt person medan hämtningen pågick.
+    if (this._profilePersonIdx !== idx) return;
+    this._profileEvents = { cache: { data }, sources };
+    this._profileLoading = false;
+    this._syncProfileDialog(true);
+  }
+
+  _syncProfileDialog(force = false) {
+    const dialog = this.shadowRoot.querySelector("#fpc-profile-dialog");
+    if (!dialog) return;
+    if (this._profilePersonIdx === null) {
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+      dialog.innerHTML = "";
+      return;
+    }
+    if (!force && dialog.open) return;
+    this._renderProfileDialogContent(dialog);
+    if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal();
+  }
+
+  _renderProfileDialogContent(dialog) {
+    const cfg = this._config;
+    const idx = this._profilePersonIdx;
+    const p = cfg.persons[idx];
+    if (!p) {
+      dialog.innerHTML = "";
+      return;
+    }
+    const { name } = this._personDisplay(p);
+
+    let bodyHtml;
+    if (this._profileLoading || !this._profileEvents) {
+      bodyHtml = `<div class="fpc-profile-loading">Laddar schema…</div>`;
+    } else {
+      const { cache, sources } = this._profileEvents;
+      const todayIso = isoDate(new Date());
+      const days = Array.from({ length: PROFILE_DAYS_AHEAD }, (_, i) => {
+        const d = new Date();
+        d.setDate(d.getDate() + i);
+        return isoDate(d);
+      });
+      const dayBlocks = days
+        .map((dateIso) => {
+          const events = this._eventsForDateFromSources(dateIso, cache, sources).filter(
+            (ev) => !this._hiddenSources.has(ev.sourceKey) && !ev.hidden
+          );
+          if (events.length === 0) return "";
+          const d = new Date(dateIso);
+          const dayLabel = `${DAY_LABELS[weekdayIndex(d)]} ${d.getDate()}/${d.getMonth() + 1}`;
+          const eventsHtml = events
+            .map((ev) => {
+              const time = eventStartTimeLabel(ev);
+              const badge = renderKeywordBadge(
+                ev.image ? { image: ev.image } : matchIcon(ev.summary || "", ev.sourceIconKeywords || [])
+              );
+              return `
+                <div class="fpc-profile-event">
+                  <div class="fpc-profile-event-time">${time ? fpcEsc(time) : "Heldag"}</div>
+                  <div class="fpc-profile-event-text">${badge}${fpcEsc(ev.summary || "(utan titel)")}</div>
+                </div>
+              `;
+            })
+            .join("");
+          return `
+            <div class="fpc-profile-day${dateIso === todayIso ? " fpc-profile-day-today" : ""}">
+              <div class="fpc-profile-day-label">${fpcEsc(dayLabel)}</div>
+              ${eventsHtml}
+            </div>
+          `;
+        })
+        .join("");
+      bodyHtml = dayBlocks.trim()
+        ? dayBlocks
+        : `<div class="fpc-profile-empty">Inget planerat de kommande veckorna.</div>`;
+    }
+
+    dialog.innerHTML = `
+      <div class="fpc-profile-dialog-inner">
+        <div class="fpc-profile-dialog-header">
+          ${this._personAvatarHtml(p)}
+          <div class="fpc-profile-dialog-title">${fpcEsc(name)}</div>
+        </div>
+        <div class="fpc-profile-dialog-body">${bodyHtml}</div>
+        <div class="fpc-create-form-actions">
+          <button type="button" class="fpc-create-cancel" id="fpc-profile-close">Stäng</button>
+        </div>
+      </div>
+    `;
+    dialog.querySelector("#fpc-profile-close").addEventListener("click", () => this._closeProfile());
   }
 
   // Bygger samma formulärobjekt som _newCreatingEvent, men fyllt från en
@@ -2634,8 +2934,10 @@ class FamilyPlannerCard extends HTMLElement {
   }
 
   static getStubConfig() {
-    // Kortet har ingen egen konfiguration - allt sätts upp i sidopanelen
-    // "Familjeplanering" och delas av alla kort, se _maybeLoadSharedConfig().
+    // Kortet har i övrigt ingen egen konfiguration - allt sätts upp i
+    // sidopanelen "Familjeplanering" och delas av alla kort, se
+    // _maybeLoadSharedConfig(). Valfritt "section" (se normalizeSection)
+    // låter dig lägga till kortet flera gånger och visa en del i taget.
     return { type: "custom:family-planner-card" };
   }
 }

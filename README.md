@@ -62,7 +62,8 @@ uppdatera, starta om HA, klart.
 
 ## Lägga till kortet
 
-Kortet tar ingen konfiguration - lägg till det på valfritt dashboard med:
+Kortet tar i normalfallet ingen konfiguration - lägg till det på valfritt
+dashboard med:
 
 ```yaml
 type: custom:family-planner-card
@@ -72,6 +73,38 @@ type: custom:family-planner-card
 upp titel, nedräkningar, väder, personer, kalendrar, ikon-nyckelord,
 månadskalender, semestermarkering, TTS och allmänna sensorer - se
 [Sidopanelen](#sidopanelen). Alla kort på instansen visar samma data.
+
+### Visa Idag/Veckoschema/Månadskalender som separata kort
+
+Kortet visar normalt alla tre delarna (Idag, Veckoschema, Månadskalender)
+i ett och samma kort. Vill du istället placera dem var för sig - t.ex. en
+liten "Idag"-widget högst upp på en dashboard och ett större veckoschema
+längre ner - lägg till kortet flera gånger med det valfria fältet
+`section`:
+
+```yaml
+type: custom:family-planner-card
+section: today   # "today" | "week" | "month" (utelämnat = alla tre, som förut)
+```
+
+Lägg till kortet en gång per sektion du vill visa separat:
+
+```yaml
+type: custom:family-planner-card
+section: today
+---
+type: custom:family-planner-card
+section: week
+---
+type: custom:family-planner-card
+section: month
+```
+
+Alla kort - oavsett `section` - läser fortfarande samma delade
+konfiguration från sidopanelen, så du behöver bara sätta upp familjen en
+gång. `section: month` visar bara något om **Månadskalender** även är
+aktiverad i sidopanelen (se [Månadskalender](#månadskalender)) - annars
+visas kortet tomt.
 
 ## Nedräkningsraden (överst)
 
@@ -182,6 +215,40 @@ radnamn för dem i veckoschemat (default "Övrigt").
 Alla kalendrar i listan visas i månadskalendern precis som personers
 kalendrar (egna filter-chips och prickar), men i veckoschemat samlas de
 i **en enda delad rad** istället för en rad var.
+
+## Jobbkalendrar (privata, bara för dig själv)
+
+En vuxen kan koppla sitt eget jobbschema till sin person i sidopanelen
+utan att resten av familjen ser det. Under personens kort:
+
+1. **Koppla till HA-konto** — välj vilket inloggningskonto på HA-
+   instansen som är just den här personen (en rullgardin med kontona på
+   instansen, kräver admin för att fyllas i — se nedan).
+2. **Jobbkalendrar** — lägg till en eller flera kalender-entiteter
+   (samma väljare som övriga kalendrar, plus namn och färg).
+
+Kortet hämtar och visar bara jobbkalendrarna när den som faktiskt är
+inloggad i webbläsaren (`hass.user.id`) matchar det kopplade kontot —
+för alla andra som loggar in på samma HA-instans finns kalendrarna inte
+med alls, varken hämtade eller dolda. Synliga jobbkalendrar dyker upp
+precis som personens vanliga `calendar_entity` — i veckoschemat, i
+månadskalendern och i [personprofilen](#klickbar-personprofil).
+
+Kontolistan i väljaren hämtas via `config/auth/list`, som kräver ett
+adminkonto — en icke-admin som öppnar panelen ser istället ett vanligt
+textfält för konto-id:t (samma reservlösning som entitetsväljaren
+faller tillbaka på om `ha-entity-picker` saknas).
+
+## Klickbar personprofil
+
+Klicka på en persons namn/avatar — i Idag-raden eller i veckoschemats
+radhuvud — för att öppna en dialog med personens fulla schema de
+kommande tre veckorna, dag för dag med tid och titel. Bra för att se
+ett barns hela schema (skola, fritids, träningar, borta-kalendrar,
+delade kalendrar kopplade till barnet) samlat på ett ställe istället
+för att bläddra vecka för vecka. Källorna är desamma som redan driver
+veckoschemat/månadskalendern (egen kalender, kopplade borta-/delade
+kalendrar, och — om inloggad som rätt person — jobbkalendern ovan).
 
 ## Borta hos andra föräldern
 

@@ -65,8 +65,16 @@ och `weather.show_week: true` lägger till en väderrad (ikon + temp per
 dag) överst i veckoschemat, hämtad via `weather.get_forecasts`.
 
 ## Klickbar person-rad
-Klick på en persons rad öppnar en more-info-dialog (standard-HA) eller
-navigerar till en egen detaljvy/dashboard för den personen.
+✅ Klar. Klick på en persons namn/avatar (Idag-raden eller veckoschemats
+radhuvud) öppnar en egen dialog (inte HA:s standard more-info) med
+personens fulla schema de kommande tre veckorna, byggt av samma källor
+som redan driver vecko-/månadsvyn.
+
+## Privata jobbkalendrar
+✅ Klar. En person kan kopplas till ett HA-konto (`ha_user_id`) i
+sidopanelen, och få en eller flera jobbkalendrar som bara hämtas/visas i
+kortet när den inloggade webbläsarsessionen faktiskt är det kontot —
+andra familjemedlemmar ser dem aldrig, inte ens gömda.
 
 ## "Nästa händelse" i person-raden
 Istället för/utöver dagens sammanfattning: visa nästa kommande händelse

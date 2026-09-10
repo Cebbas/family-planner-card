@@ -158,7 +158,7 @@ function eventDateRange(ev) {
 }
 
 // Täcker händelsen ett givet datum - används för både flerdagars
-// semester-/borta-markeringar i månadsvyn och för att visa flerdagars-
+// dagmarkeringar/borta-markeringar i månadsvyn och för att visa flerdagars-
 // händelser (t.ex. en hel "borta"-helg) varje dag de pågår i veckoschemat,
 // inte bara på startdagen.
 function eventCoversDate(ev, dateIso) {

@@ -40,7 +40,7 @@ HACS-kategori ("Integration") av samma repo, sätts upp via
 Inställningar → Enheter & tjänster.
 
 Naturligt nästa steg: låta panelen även redigera fler av kortets globala
-inställningar (väder, TTS, semestermarkering) om man vill undvika att
+inställningar (väder, TTS, dagmarkeringar) om man vill undvika att
 upprepa dem per kort/dashboard också.
 
 ## Månadskalender
@@ -249,12 +249,23 @@ händelser med den ikonen automatiskt försvinner från vecko-/
 månadsvyerna utan att behöva kryssas i varje enskild händelse för sig.
 
 ## Övrigt (lägre prioritet)
-- Håll koll på om ha-icon saknas/ogiltig icon-sträng ger tyst fel istället
-  för krasch.
+✅ Klar: ha-icon-hantering av saknad/ogiltig icon-sträng. Alla ställen som
+bygger en `<ha-icon>` går antingen via `renderIconBadge()` (`if (!icon)
+return ""` som första rad) eller har ett hårdkodat fallback-ikonnamn
+(`p.icon || "mdi:account"`, `g.icon || "mdi:bell"`, `it.icon ||
+"mdi:calendar-star"`, `weatherIcon()`). Ingen kodväg skickar
+`undefined`/tomt till `<ha-icon>`, och HA:s eget element renderar bara en
+tom ikon vid ett ogiltigt mdi-namn - inget att skydda mot.
+
+✅ Klar: felmeddelande i UI:t om `calendar.create_event` misslyckas.
+`_saveCreatingEvent`/`_saveEditingEvent`/`_deleteEditingEvent` fångar fel
+och sätter `_creatingEventError` till ett läsbart meddelande (t.ex.
+"Kunde inte spara - kontrollera att kalendern går att skriva till."),
+visat i dialogen via `.fpc-create-error` istället för att tyst
+misslyckas.
+
 - Ev. stöd för fler än 7 dagar i veckoschemat (t.ex. "kommande 14 dagar"
   som alternativt vy-läge).
 - Notis/highlight om en person-rad är tom flera dagar i rad (kan tyda på
   att sensorn slutat uppdateras) — visa en "!"-badge i UI:t istället för
   att bara logga det.
-- Felmeddelande i UI:t (inte bara tyst fail) om `calendar.create_event`
-  misslyckas, t.ex. pga skrivskyddad kalender.

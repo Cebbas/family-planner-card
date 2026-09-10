@@ -3,7 +3,7 @@
  * -----------------------------------------------------------------------
  * Fristående sida i Home Assistants sidopanel för att bygga upp all
  * konfiguration (titel, nedräkningar, väder, personer, kalendrar,
- * ikon-nyckelord, månadskalender, semestermarkering, TTS, allmänna
+ * ikon-nyckelord, månadskalender, dagmarkeringar, TTS, allmänna
  * sensorer) som Family Planner Card läser automatiskt - kortet har
  * ingen egen konfiguration, se dess setConfig()/_maybeLoadSharedConfig().
  *
@@ -88,7 +88,7 @@ const PANEL_TABS = [
   { key: "away", label: "Borta" },
   { key: "keywords", label: "Nyckelord" },
   { key: "month", label: "Månadskalender" },
-  { key: "vacation", label: "Semester" },
+  { key: "vacation", label: "Dagmarkeringar" },
   { key: "tts", label: "TTS" },
   { key: "generalSensors", label: "Sensorer" },
 ];
@@ -948,7 +948,7 @@ class FamilyPlannerPanel extends HTMLElement {
     const card = document.createElement("div");
     card.className = "fpp-item-card";
 
-    const matchInput = this._textInput(kw.match, "Ord att matcha, t.ex. lov", (val) => {
+    const matchInput = this._textInput(kw.match, "Ord att matcha, t.ex. lov, studiedag, jul", (val) => {
       const vacation_keywords = [...this._data.vacation_keywords];
       vacation_keywords[idx] = { ...vacation_keywords[idx], match: val };
       this._data.vacation_keywords = vacation_keywords;
@@ -1183,7 +1183,7 @@ class FamilyPlannerPanel extends HTMLElement {
             <div class="fpp-checkbox-row" id="fpp-monthcal-row"></div>
           </div>
           <div class="fpp-section fpp-tab-panel${this._activeTab === "vacation" ? " fpp-tab-panel-active" : ""}" data-tab-panel="vacation">
-            <div class="fpp-section-title">Semestermarkering (färgar hela dagar i månadskalendern)</div>
+            <div class="fpp-section-title">Dagmarkering (färgar hela dagar i månadskalendern, t.ex. lov, studiedagar eller högtider)</div>
             <div id="fpp-vacation-list"></div>
           </div>
           <div class="fpp-section fpp-tab-panel${this._activeTab === "tts" ? " fpp-tab-panel-active" : ""}" data-tab-panel="tts">
@@ -1363,11 +1363,11 @@ class FamilyPlannerPanel extends HTMLElement {
     monthCalRow.appendChild(monthCalCheckbox);
     monthCalRow.appendChild(monthCalLabel);
 
-    // Semestermarkering
+    // Dagmarkering
     const vacListEl = this.querySelector("#fpp-vacation-list");
     this._data.vacation_keywords.forEach((kw, idx) => vacListEl.appendChild(this._vacationCard(kw, idx)));
     vacListEl.appendChild(
-      this._addBtn("+ Lägg till semestermarkering", () => {
+      this._addBtn("+ Lägg till dagmarkering", () => {
         this._data.vacation_keywords = [...this._data.vacation_keywords, { match: "", color: "#c8f7c5" }];
         this._markDirty();
         this._render();

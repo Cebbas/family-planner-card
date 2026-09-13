@@ -5,9 +5,9 @@ sidebar panel from this single integration, so installing it is the
 only step needed:
 
 - Serves the card + panel JS from its own www/ folder via two small
-  no-cache views (see _NoCacheJsView) and auto-injects the card as a
-  frontend module on every page (add_extra_js_url) - no manual
-  Lovelace resource to add.
+  no-cache views (see _NoCacheJsView) and registers the card as a
+  Lovelace resource on first startup (see _async_ensure_lovelace_resource)
+  - no manual Lovelace resource to add.
 - Registers the sidebar panel itself, serving the panel JS the same
   way - no manual panel_custom: block in configuration.yaml.
 - Stores the shared family configuration (persons, calendars, icon
@@ -21,6 +21,7 @@ only step needed:
 """
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 
 import voluptuous as vol
@@ -77,20 +78,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websocket_api.async_register_command(hass, ws_set_event_hidden)
 
     # VIKTIGT: URL:en måste vara stabil (ingen ?v=<version>-parameter
-    # eller liknande) - frontend.add_extra_js_url() har inget publikt sätt
-    # att ta bort en tidigare tillagd URL igen (den ligger kvar tills
-    # nästa fullständiga omstart av HA, inte bara en omladdning av den
-    # här integrationen). Skulle URL:en ändras vid varje release skulle
-    # varje omladdning under utveckling lägga till ännu en <script>-tagg
-    # ovanpå alla tidigare - och eftersom customElements.define() bara
-    # går att köra en gång per tagnamn skulle webbläsaren fastna på
-    # vilken version som än laddades först sen senaste HA-omstarten,
-    # oavsett hur många nyare filer som sen serverats (precis det bugg-
-    # beteende en tidigare version av den här kommentaren försökte lösa
-    # med en cache-busting-parameter, som i praktiken gjorde det värre).
-    # Färskhet löses istället helt av _NoCacheJsView:s explicita
-    # Cache-Control-huvud - samma URL, men aldrig en cachad kopia.
-    frontend.add_extra_js_url(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
+    # eller liknande) - _async_ensure_lovelace_resource lägger bara till
+    # posten en gång (idempotent på url:en) och skulle annars lägga till
+    # ännu en resurs-post vid varje release. Färskhet löses istället helt
+    # av _NoCacheJsView:s explicita Cache-Control-huvud - samma URL, men
+    # aldrig en cachad kopia.
+    #
+    # Registreras som en riktig Lovelace-resurs istället för det tidigare
+    # frontend.add_extra_js_url() - den senare laddar skriptet på VARJE
+    # sida samtidigt som HA:s egen app.js håller på att byta ut
+    # window.customElements mot sin scopade shim under bootstrap. Vinner
+    # skriptets customElements.define() den kapplöpningen fel går HELA
+    # gränssnittet sönder (en ohanterad "already been used"-DOMException),
+    # inte bara det här kortet - exakt den bugg som låg bakom höstens
+    # totala utelåsning (hittad via RoomFlow, se dess CHANGELOG) och som
+    # bekräftades separat här: samma "Konfigurationsfel" på just det här
+    # kortet, trots att resten av gränssnittet fungerade. Se även
+    # https://github.com/aex351/home-assistant-neerslag-card/issues/58.
+    # En riktig Lovelace-resurs laddas istället via Lovelace:s egen,
+    # sekventiella resurs-inläsning, som körs efter att bootstrappen
+    # redan är klar.
+    await _async_ensure_lovelace_resource(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
 
     await async_register_panel(
         hass,
@@ -112,10 +120,52 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.pop(DOMAIN, None)
     hass.data.pop(HIDDEN_EVENTS_DATA_KEY, None)
     frontend.async_remove_panel(hass, PANEL_URL_PATH)
-    # frontend har inget publikt sätt att ta bort en extra-js-url igen -
-    # den ligger kvar tills nästa omstart av HA, vilket är ofarligt
-    # (kortet finns kvar på disk tills dess).
+    await _async_remove_lovelace_resource(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
     return True
+
+
+_LOVELACE_RESOURCES_STORAGE_KEY = "lovelace_resources"
+_LOVELACE_RESOURCES_STORAGE_VERSION = 1
+
+
+async def _async_ensure_lovelace_resource(hass: HomeAssistant, url: str) -> None:
+    """Register url as a Lovelace module resource, if not already present.
+
+    Skriver direkt till lovelace_resources-storaget istället för att gå
+    via lovelaces interna Python-API, som inte är en stabil dependency
+    att importera från en annan integration (samma avvägning som
+    RoomFlow gjorde när den läste samma store). Idempotent på url, så
+    detta är säkert att köra vid varje HA-start.
+
+    OBS: Lovelace kan redan ha läst in sin resurslista i minnet innan
+    den här integrationen hinner köra, beroende på laddningsordning vid
+    en och samma HA-start. Den allra första gången en ny post läggs till
+    kan den därför synas först efter ytterligare en omstart.
+    """
+    store: Store = Store(
+        hass, _LOVELACE_RESOURCES_STORAGE_VERSION, _LOVELACE_RESOURCES_STORAGE_KEY
+    )
+    data = await store.async_load() or {"items": []}
+    items = data.setdefault("items", [])
+    if any(item.get("url") == url for item in items):
+        return
+    items.append({"id": uuid.uuid4().hex, "type": "module", "url": url})
+    await store.async_save(data)
+
+
+async def _async_remove_lovelace_resource(hass: HomeAssistant, url: str) -> None:
+    """Undo _async_ensure_lovelace_resource."""
+    store: Store = Store(
+        hass, _LOVELACE_RESOURCES_STORAGE_VERSION, _LOVELACE_RESOURCES_STORAGE_KEY
+    )
+    data = await store.async_load()
+    if not data:
+        return
+    items = data.get("items", [])
+    remaining = [item for item in items if item.get("url") != url]
+    if len(remaining) != len(items):
+        data["items"] = remaining
+        await store.async_save(data)
 
 
 class _NoCacheJsView(HomeAssistantView):
@@ -126,8 +176,9 @@ class _NoCacheJsView(HomeAssistantView):
     all (our previous setup, which left it up to whatever HTTP client was
     asking - the Android Companion App's webview has been seen holding on
     to an old response regardless). The URL itself is deliberately stable
-    across releases (see the add_extra_js_url call in async_setup_entry);
-    this header is what actually guarantees a fresh fetch every time.
+    across releases (see _async_ensure_lovelace_resource in
+    async_setup_entry); this header is what actually guarantees a fresh
+    fetch every time.
     """
 
     requires_auth = False

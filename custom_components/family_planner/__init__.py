@@ -221,6 +221,67 @@ async def ws_get_config(
     connection.send_result(msg["id"], {"value": data or {}})
 
 
+def _person_key(person: dict) -> str:
+    """Same identity used client-side, see personMatchKey() in the card/panel."""
+    return str(person.get("name") or person.get("person_entity") or "")
+
+
+def _current_person(config: dict, user_id: str | None) -> dict | None:
+    if not user_id:
+        return None
+    for person in config.get("persons") or []:
+        if isinstance(person, dict) and person.get("ha_user_id") == user_id:
+            return person
+    return None
+
+
+def _is_adult(config: dict, user_id: str | None) -> bool:
+    """Mirror _isAdultUser() in the card/panel: unknown login or no role -> adult.
+
+    Keeps existing profiles from suddenly becoming locked out the moment
+    this check ships - only someone explicitly marked role: "child" in the
+    panel is restricted.
+    """
+    person = _current_person(config, user_id)
+    return person is None or person.get("role") != "child"
+
+
+def _blocked_person_changes(old_data: dict, new_data: dict, user_id: str) -> bool:
+    """True if new_data changes anything outside the calling child's own entry.
+
+    save_config overwrites the whole shared document in one call (persons,
+    calendars, countdowns, weather, ...) - everything except "persons" is
+    therefore always "someone else's" for a child, and within "persons" a
+    child may only touch their own entry (and not its "role" field, so they
+    can't promote themselves to adult - same restriction the panel already
+    enforces client-side by disabling that field).
+    """
+    old_rest = {k: v for k, v in old_data.items() if k != "persons"}
+    new_rest = {k: v for k, v in new_data.items() if k != "persons"}
+    if old_rest != new_rest:
+        return True
+
+    old_persons = old_data.get("persons") or []
+    new_persons = new_data.get("persons") or []
+    if len(old_persons) != len(new_persons):
+        return True
+
+    old_by_key = {_person_key(p): p for p in old_persons if isinstance(p, dict)}
+    for new_person in new_persons:
+        if not isinstance(new_person, dict):
+            return True
+        old_person = old_by_key.get(_person_key(new_person))
+        if old_person is None:
+            return True
+        if old_person.get("ha_user_id") == user_id:
+            if new_person.get("role") != old_person.get("role"):
+                return True
+            continue
+        if new_person != old_person:
+            return True
+    return False
+
+
 @websocket_api.websocket_command(
     {
         vol.Required("type"): "family_planner/save_config",
@@ -231,8 +292,30 @@ async def ws_get_config(
 async def ws_save_config(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
 ) -> None:
-    """Save the family planner config."""
-    await _get_store(hass).async_save(msg["value"])
+    """Save the family planner config.
+
+    A child (role: "child" on the person whose ha_user_id matches the
+    caller) may only save a payload that leaves every other person's entry,
+    and everything outside "persons", unchanged - see
+    _blocked_person_changes(). Without this, save_config's "overwrite the
+    whole shared document" design would let a child rewrite a sibling's
+    calendar/profile/role through the very same call they use to edit their
+    own. Adults, and anyone without a matched login (e.g. a shared kiosk
+    session), save as before with no restriction - see _is_adult().
+    """
+    old_data = await _get_store(hass).async_load() or {}
+    new_data = msg["value"]
+    user_id = connection.user.id if connection.user else None
+
+    if not _is_adult(old_data, user_id) and _blocked_person_changes(old_data, new_data, user_id):
+        connection.send_error(
+            msg["id"],
+            "unauthorized",
+            "Bara vuxna kan ändra andra familjemedlemmars uppgifter.",
+        )
+        return
+
+    await _get_store(hass).async_save(new_data)
     connection.send_result(msg["id"])
 
 

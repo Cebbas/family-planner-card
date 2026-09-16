@@ -531,6 +531,28 @@ class FamilyPlannerPanel extends HTMLElement {
     return select;
   }
 
+  // Vuxen/barn-väljare - styr redigeringsrättigheter i både det här
+  // panelen (se _canEditPersonRecord) och kortet (family-planner-card.js:
+  // _isAdultUser/_canWriteToEntity). Defaultar till "adult", se
+  // _normalizePersons() i kortet - samma default gäller här.
+  _mkRolePicker(value, onChange) {
+    const select = document.createElement("select");
+    select.style.flex = "1";
+    const options = [
+      { value: "adult", label: "Vuxen - får redigera alla" },
+      { value: "child", label: "Barn - får bara redigera sin egen kalender/lista" },
+    ];
+    options.forEach((o) => {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label;
+      if ((value === "child" ? "child" : "adult") === o.value) opt.selected = true;
+      select.appendChild(opt);
+    });
+    select.addEventListener("change", (ev) => onChange(ev.target.value));
+    return select;
+  }
+
   // Nästlad lista med jobbkalendrar för en person - varje kalender är
   // bara synlig i kortet för det HA-konto som kopplats ovan (ha_user_id),
   // aldrig för andra som loggar in på samma HA-instans.
@@ -683,9 +705,54 @@ class FamilyPlannerPanel extends HTMLElement {
     return wrap;
   }
 
+  // Personposten (om någon) vars ha_user_id matchar den inloggade
+  // användaren i den här webbläsarsessionen - samma matchning som kortet
+  // gör i _currentPerson() (family-planner-card.js), duplicerad här eftersom
+  // panelen och kortet inte delar kod.
+  _currentPerson() {
+    const currentUserId = this._hass && this._hass.user ? this._hass.user.id : null;
+    if (!currentUserId) return null;
+    return this._data.persons.find((p) => p.ha_user_id && p.ha_user_id === currentUserId) || null;
+  }
+
+  // Vuxna (role: "adult", default) får redigera vem som helst i panelen.
+  // Okopplade konton (inget ha_user_id satt på någon person) räknas också
+  // som vuxna - skrivskyddet slår bara till när vi vet att den inloggade
+  // faktiskt är markerad som barn.
+  _isAdultUser() {
+    const me = this._currentPerson();
+    return !me || me.role !== "child";
+  }
+
   _personCard(p, idx) {
+    const me = this._currentPerson();
+    const isOwnCard = !!me && me === p;
+    const canEdit = this._isAdultUser() || isOwnCard;
+
     const card = document.createElement("div");
-    card.className = "fpp-item-card";
+    card.className = canEdit ? "fpp-item-card" : "fpp-item-card fpp-item-card-readonly";
+    if (!canEdit) {
+      const lock = document.createElement("div");
+      lock.className = "fpp-item-card-lock";
+      lock.title = "Bara vuxna kan redigera andras profiler";
+      lock.textContent = "🔒";
+      card.appendChild(lock);
+    }
+
+    const roleField = document.createElement("div");
+    roleField.className = "fpp-field";
+    roleField.innerHTML = `<div class="fpp-label">Roll</div>`;
+    const rolePicker = this._mkRolePicker(p.role, (val) => {
+      this._data.persons[idx] = { ...this._data.persons[idx], role: val };
+      this._markDirty();
+      this._render();
+    });
+    // Bara vuxna får ändra roller - annars skulle ett barn kunna göra sig
+    // själv till "vuxen" och låsa upp resten av familjens kalendrar/listor.
+    // Gäller oavsett canEdit (som tillåter barn att ändra sin egen profil i
+    // övrigt), se _isAdultUser().
+    rolePicker.disabled = !this._isAdultUser();
+    roleField.appendChild(rolePicker);
 
     const nameField = document.createElement("div");
     nameField.className = "fpp-field";
@@ -727,11 +794,15 @@ class FamilyPlannerPanel extends HTMLElement {
       })
     );
 
-    const removeBtn = this._removeBtn(() => {
-      this._data.persons = this._data.persons.filter((_, i) => i !== idx);
-      this._markDirty();
-      this._render();
-    });
+    // Bara vuxna får ta bort personer - ett barn ska inte kunna ta bort
+    // ens sin egen post (då tappar man ju kalendern/behörigheten helt).
+    const removeBtn = this._isAdultUser()
+      ? this._removeBtn(() => {
+          this._data.persons = this._data.persons.filter((_, i) => i !== idx);
+          this._markDirty();
+          this._render();
+        })
+      : document.createElement("div");
 
     const iconInput = this._textInput(p.icon, "mdi:account", (val) => {
       this._data.persons[idx] = { ...this._data.persons[idx], icon: val };
@@ -743,6 +814,7 @@ class FamilyPlannerPanel extends HTMLElement {
     });
 
     card.appendChild(this._row([nameField, removeBtn]));
+    card.appendChild(this._row([roleField]));
     card.appendChild(this._row([personEntityField]));
     card.appendChild(this._personEntitiesList(p, idx));
     card.appendChild(this._row([calField]));
@@ -1079,6 +1151,12 @@ class FamilyPlannerPanel extends HTMLElement {
         .fpp-item-card {
           border: 1px solid var(--divider-color); border-radius: 10px;
           padding: 14px; margin-bottom: 14px; background: var(--card-background-color);
+        }
+        .fpp-item-card-readonly {
+          opacity: 0.55; pointer-events: none; position: relative;
+        }
+        .fpp-item-card-lock {
+          position: absolute; top: 12px; right: 12px; font-size: 1.1em; opacity: 0.8;
         }
         .fpp-remove {
           border: none; background: none; color: var(--error-color, #db4437);

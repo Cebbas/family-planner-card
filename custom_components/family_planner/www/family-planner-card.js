@@ -109,6 +109,18 @@ function personMatchKey(p) {
   return (p && (p.name || p.person_entity)) || "";
 }
 
+// Case-okänslig nyckel för config.person (setConfig) - matchar mot
+// personens namn eller person_entity-slug ("person.naomi" -> "naomi") så
+// att "person: naomi" i dashboard-YAML fungerar oavsett skiftläge.
+function personFilterKey(p) {
+  return {
+    name: String((p && p.name) || "").toLowerCase(),
+    slug: String((p && p.person_entity) || "")
+      .replace(/^person\./, "")
+      .toLowerCase(),
+  };
+}
+
 // Returnerar hela den matchade nyckelordsposten (inte bara ikonen) så att
 // både `icon` och `image` finns kvar för renderKeywordBadge() att välja
 // mellan - ett nyckelord kan ha båda satta samtidigt.
@@ -367,6 +379,11 @@ class FamilyPlannerCard extends HTMLElement {
         // Kopplar personen till ett HA-konto - jobbkalendrarna nedan visas
         // bara i kortet när hass.user.id matchar, se _calendarSources().
         ha_user_id: p.ha_user_id || null,
+        // "adult" | "child" - styr redigeringsrättigheter, se _isAdultUser().
+        // Defaultar till "adult" så befintliga profiler inte plötsligt blir
+        // skrivskyddade förrän någon aktivt märker ett barn som "child" i
+        // sidopanelen.
+        role: p.role === "child" ? "child" : "adult",
         work_calendars: this._normalizeWorkCalendars(p.work_calendars),
       }));
   }
@@ -436,11 +453,15 @@ class FamilyPlannerCard extends HTMLElement {
     }
     // Kortet har i övrigt ingen egen konfiguration - allt hämtas från
     // sidopanelen "Familjeplanering" (se _maybeLoadSharedConfig) så att
-    // alla kort på instansen alltid visar samma familj. Enda undantaget
-    // är "section" - valfri, per kortinstans, se normalizeSection() -
-    // som gör det möjligt att lägga till kortet flera gånger och bara
-    // visa en del (Idag/Veckoschema/Månadskalender) i varje.
+    // alla kort på instansen alltid visar samma familj. Undantagen är
+    // "section" - valfri, per kortinstans, se normalizeSection() - som gör
+    // det möjligt att lägga till kortet flera gånger och bara visa en del
+    // (Idag/Veckoschema/Månadskalender) i varje - och "person", som filtrerar
+    // bort alla andra familjemedlemmar så kortet blir en enda persons egen
+    // vy (t.ex. på ett barns dashboard). Matchas case-okänsligt mot personens
+    // namn eller person_entity, se personFilterKey()/_matchesPersonFilter().
     this._section = normalizeSection(config.section);
+    this._personFilter = config.person ? String(config.person).trim().toLowerCase() : null;
     this._config = this._defaultConfig();
     this._collapsed = false;
     this._collapsedInitialized = false;
@@ -518,6 +539,14 @@ class FamilyPlannerCard extends HTMLElement {
             ? { tts_entity: data.tts.tts_entity, media_player: data.tts.media_player }
             : null,
       };
+      // "person"-filtret (setConfig) - klipp bort alla andra familjemedlemmar
+      // så det här kortet bara visar en person, oavsett vad sidopanelen
+      // lagrar. Görs här (inte i _normalizePersons) så filtret appliceras
+      // varje gång delad config laddas om, utan att påverka andra kort-
+      // instanser som läser samma lagring.
+      if (this._personFilter) {
+        this._config.persons = this._config.persons.filter((p) => this._matchesPersonFilter(p));
+      }
       // Bara vid allra första laddningen - annars skulle en cache-
       // uppdatering var 5:e minut nollställa ett kort användaren redan
       // manuellt fällt ut/ihop.
@@ -855,6 +884,78 @@ class FamilyPlannerCard extends HTMLElement {
       return fallback || "Inget planerat idag";
     }
     return st.state;
+  }
+
+  // Matchar en person mot config.person (setConfig) - se personFilterKey().
+  _matchesPersonFilter(p) {
+    if (!this._personFilter) return true;
+    const { name, slug } = personFilterKey(p);
+    return name === this._personFilter || slug === this._personFilter;
+  }
+
+  // Personposten (om någon) vars ha_user_id matchar den inloggade
+  // användaren i den här webbläsarsessionen - samma matchning som
+  // jobbkalendrarna använder, se _calendarSources().
+  _currentPerson() {
+    const cfg = this._config;
+    const currentUserId = this._hass && this._hass.user ? this._hass.user.id : null;
+    if (!cfg || !currentUserId) return null;
+    return cfg.persons.find((p) => p.ha_user_id && p.ha_user_id === currentUserId) || null;
+  }
+
+  // Vuxna (role: "adult", default) får redigera vem som helst - okopplade
+  // konton (inget ha_user_id satt på någon person, t.ex. en delad
+  // kiosk-inloggning) behandlas också som vuxna så att skrivskyddet bara
+  // slår till när vi faktiskt vet vem som är inloggad och att den personen
+  // är markerad som barn. Barn får bara redigera sin egen rad, se
+  // _canEditPerson().
+  _isAdultUser() {
+    const me = this._currentPerson();
+    return !me || me.role !== "child";
+  }
+
+  // Får den inloggade användaren redigera/lägga till händelser för person p?
+  // Vuxna: alltid. Barn: bara sin egen rad (jämfört på samma sätt som
+  // _currentPerson() slår upp vem "jag" är).
+  _canEditPerson(p) {
+    if (this._isAdultUser()) return true;
+    const me = this._currentPerson();
+    return !!me && p === me;
+  }
+
+  // Vilka personer en kalenderkälla (calendar_entity) hör till - se
+  // personIdxs i _calendarSources(). Tom lista = delad/"Övrigt"-kalender,
+  // inte kopplad till en specifik person.
+  _personsForEntity(entityId) {
+    const src = this._calendarSources().find((s) => s.calendar_entity === entityId);
+    if (!src) return [];
+    return src.personIdxs.map((idx) => this._config.persons[idx]).filter(Boolean);
+  }
+
+  // Får den inloggade användaren skriva (skapa/ändra/ta bort händelser) på
+  // den här kalendern? Vuxna: alltid. Barn: sin egen kalender, plus delade/
+  // "Övrigt"-kalendrar (personIdxs: []) som inte hör till någon specifik
+  // person - bara kalendrar kopplade till EN ANNAN person är låsta.
+  // Kontrolleras direkt i _saveCreatingEvent/_saveEditingEvent/
+  // _deleteEditingEvent (enda ställena som faktiskt anropar calendar/event/
+  // create|update|delete) - inte bara i UI:t, så skyddet gäller oavsett
+  // vilken knapp/genväg som ledde dit.
+  _canWriteToEntity(entityId) {
+    if (this._isAdultUser()) return true;
+    const me = this._currentPerson();
+    if (!me) return true; // Okänd inloggning (t.ex. delad kiosk) - se _isAdultUser().
+    const owners = this._personsForEntity(entityId);
+    return owners.length === 0 || owners.includes(me);
+  }
+
+  // Kalenderkällor den inloggade användaren får skapa nya händelser på -
+  // alla för vuxna, bara de egna för barn. Styr både vilken kalender en ny
+  // händelse föreslås mot (_newCreatingEvent) och vilka val som visas i
+  // "Kalender"-listan i dialogen (_renderCreateEventDialogContent).
+  _writableCalendarSources() {
+    const sources = this._calendarSources();
+    if (this._isAdultUser()) return sources;
+    return sources.filter((src) => this._canWriteToEntity(src.calendar_entity));
   }
 
   // Namn + ev. profilbild för en person - hämtas från person_entity i HA
@@ -1912,7 +2013,7 @@ class FamilyPlannerCard extends HTMLElement {
   // Startvärden för "ny händelse"-dialogen - samma vare sig man startar
   // från ett drag i rutnätet eller "+ Lägg till händelse"-knappen.
   _newCreatingEvent(startIso, endIso) {
-    const sources = this._calendarSources();
+    const sources = this._writableCalendarSources();
     return {
       startIso,
       endIso,
@@ -1993,6 +2094,11 @@ class FamilyPlannerCard extends HTMLElement {
   async _saveCreatingEvent() {
     const ce = this._creatingEvent;
     if (!this._hass || !ce || !ce.targetEntity || !ce.summary || !ce.summary.trim()) return;
+    if (!this._canWriteToEntity(ce.targetEntity)) {
+      this._creatingEventError = "Du kan bara lägga till händelser i din egen kalender.";
+      this._syncCreateEventDialog(true);
+      return;
+    }
     this._creatingEventSaving = true;
     this._creatingEventError = false;
     this._syncCreateEventDialog(true);
@@ -2025,6 +2131,14 @@ class FamilyPlannerCard extends HTMLElement {
   async _saveEditingEvent() {
     const ce = this._creatingEvent;
     if (!this._hass || !ce || !ce.uid || !ce.summary || !ce.summary.trim()) return;
+    // Kontrollera både mål- och ursprungskalendern - ett barn ska varken
+    // kunna flytta bort en händelse FRÅN en kalender den inte äger, eller
+    // flytta en TILL en den inte äger.
+    if (!this._canWriteToEntity(ce.targetEntity) || !this._canWriteToEntity(ce.originalEntity)) {
+      this._creatingEventError = "Du kan bara redigera händelser i din egen kalender.";
+      this._syncCreateEventDialog(true);
+      return;
+    }
     this._creatingEventSaving = true;
     this._creatingEventError = false;
     this._syncCreateEventDialog(true);
@@ -2089,6 +2203,11 @@ class FamilyPlannerCard extends HTMLElement {
   async _deleteEditingEvent() {
     const ce = this._creatingEvent;
     if (!this._hass || !ce || !ce.uid) return;
+    if (!this._canWriteToEntity(ce.targetEntity)) {
+      this._creatingEventError = "Du kan bara ta bort händelser i din egen kalender.";
+      this._syncCreateEventDialog(true);
+      return;
+    }
     if (!window.confirm(`Ta bort "${ce.summary || "händelsen"}"?`)) return;
     this._creatingEventSaving = true;
     this._creatingEventError = false;
@@ -2699,19 +2818,32 @@ class FamilyPlannerCard extends HTMLElement {
     const sources = this._calendarSources();
 
     const isEdit = !!ce.uid;
+    // Kan jag spara/ta bort den här händelsen som den ser ut just nu?
+    // Beräknas likadant som i _saveCreatingEvent/_saveEditingEvent/
+    // _deleteEditingEvent - de är den faktiska spärren, det här styr bara
+    // om knapparna/valen visas som tillgängliga.
+    const canWrite = isEdit
+      ? this._canWriteToEntity(ce.targetEntity) && this._canWriteToEntity(ce.originalEntity)
+      : this._canWriteToEntity(ce.targetEntity);
+    // Redigerar man en befintlig händelse på en kalender man inte får
+    // skriva till (t.ex. ett barn som öppnat ett syskons händelse) visas
+    // bara den kalendern, skrivskyddad - inte hela listan att välja bland.
+    const selectableSources =
+      isEdit && !canWrite ? sources.filter((s) => s.calendar_entity === ce.targetEntity) : this._writableCalendarSources();
 
     dialog.innerHTML = `
       <div class="fpc-create-dialog-inner">
         <div class="fpc-create-dialog-title">${isEdit ? "Redigera händelse" : "Ny händelse"}</div>
         ${this._creatingEventError ? `<div class="fpc-create-error">${fpcEsc(this._creatingEventError)}</div>` : ""}
+        ${!canWrite ? `<div class="fpc-create-hint">Det här är inte din egen kalender - du kan bara titta, inte ändra.</div>` : ""}
         <div class="fpc-create-field">
           <label class="fpc-create-field-label">Titel</label>
-          <input type="text" id="fpc-ce-title" placeholder="T.ex. Fotbollsträning" value="${fpcEsc(ce.summary)}" />
+          <input type="text" id="fpc-ce-title" placeholder="T.ex. Fotbollsträning" value="${fpcEsc(ce.summary)}" ${!canWrite ? "disabled" : ""} />
         </div>
         <div class="fpc-create-field">
           <label class="fpc-create-field-label">Kalender</label>
-          <select id="fpc-ce-target">
-            ${sources
+          <select id="fpc-ce-target" ${!canWrite ? "disabled" : ""}>
+            ${selectableSources
               .map(
                 (src) =>
                   `<option value="${fpcEsc(src.calendar_entity)}"${src.calendar_entity === ce.targetEntity ? " selected" : ""}>${fpcEsc(src.name)}</option>`
@@ -2841,9 +2973,9 @@ class FamilyPlannerCard extends HTMLElement {
         `
         }
         <div class="fpc-create-form-actions">
-          ${isEdit ? `<button type="button" class="fpc-create-delete" id="fpc-ce-delete" ${this._creatingEventSaving ? "disabled" : ""}>Ta bort</button>` : ""}
+          ${isEdit ? `<button type="button" class="fpc-create-delete" id="fpc-ce-delete" ${this._creatingEventSaving || !canWrite ? "disabled" : ""}>Ta bort</button>` : ""}
           <button type="button" class="fpc-create-cancel" id="fpc-ce-cancel">Avbryt</button>
-          <button type="button" class="fpc-create-save" id="fpc-ce-save" ${this._creatingEventSaving ? "disabled" : ""}>
+          <button type="button" class="fpc-create-save" id="fpc-ce-save" ${this._creatingEventSaving || !canWrite ? "disabled" : ""}>
             ${this._creatingEventSaving ? "Sparar…" : "Spara"}
           </button>
         </div>

@@ -1554,11 +1554,31 @@ class FamilyPlannerCard extends HTMLElement {
     // _render() kan köras flera gånger på samma instans (t.ex. varje gång
     // setConfig anropas igen under redigering) - ta bort en ev. tidigare
     // lyssnare först så de inte staplas på document.
+    //
+    // På touch blir ett svep som börjar på en dagcell (dvs vanlig scroll
+    // av sidan) en pointercancel, inte en pointerup. Utan en egen
+    // cancel-lyssnare fastnade _dragging=true, och NÄSTA tryck var som
+    // helst (ett event i dagslistan, månadspilarna, ett annat kort)
+    // avslutade det gamla draget - valde/avmarkerade dagen där svepet
+    // började, så dagslistan ritades om och innehållet flyttade sig under
+    // fingret innan click hann landa. Därför: bara samma pekare som
+    // startade draget får avsluta det, och cancel avbryter utan att välja.
     if (this._onPointerUp) {
       document.removeEventListener("pointerup", this._onPointerUp);
     }
-    this._onPointerUp = () => this._finishDrag();
+    if (this._onPointerCancel) {
+      document.removeEventListener("pointercancel", this._onPointerCancel);
+    }
+    this._onPointerUp = (ev) => {
+      if (ev.pointerId !== this._dragPointerId) return;
+      this._finishDrag();
+    };
+    this._onPointerCancel = (ev) => {
+      if (ev.pointerId !== this._dragPointerId) return;
+      this._cancelDrag();
+    };
     document.addEventListener("pointerup", this._onPointerUp);
+    document.addEventListener("pointercancel", this._onPointerCancel);
 
     this._built = true;
     this._update();
@@ -1568,6 +1588,10 @@ class FamilyPlannerCard extends HTMLElement {
     if (this._onPointerUp) {
       document.removeEventListener("pointerup", this._onPointerUp);
     }
+    if (this._onPointerCancel) {
+      document.removeEventListener("pointercancel", this._onPointerCancel);
+    }
+    this._cancelDrag();
   }
 
   _speakToday() {
@@ -1991,9 +2015,22 @@ class FamilyPlannerCard extends HTMLElement {
     return null;
   }
 
+  // Avbrutet tryck (scroll, systemgest) - släpp draget utan att välja en
+  // dag eller öppna "ny händelse".
+  _cancelDrag() {
+    if (!this._dragging) return;
+    this._dragging = false;
+    this._dragPointerId = null;
+    this._dragStart = null;
+    this._dragEnd = null;
+    this._dragMoved = false;
+    if (this._built) this._updateMonthCalendar();
+  }
+
   _finishDrag() {
     if (!this._dragging) return;
     this._dragging = false;
+    this._dragPointerId = null;
     const start = this._dragStart;
     const end = this._dragEnd;
     if (this._dragMoved && start && end) {
@@ -2396,8 +2433,12 @@ class FamilyPlannerCard extends HTMLElement {
     gridEl.querySelectorAll(".fpc-month-cell").forEach((cell) => {
       const dIso = cell.getAttribute("data-date");
       cell.addEventListener("pointerdown", (ev) => {
+        // Bara primär pekare/vänsterknapp - ett andra finger (pinch) eller
+        // högerklick ska inte starta ett nytt drag ovanpå det första.
+        if (!ev.isPrimary || ev.button !== 0) return;
         ev.preventDefault();
         this._dragging = true;
+        this._dragPointerId = ev.pointerId;
         this._dragMoved = false;
         this._dragStart = dIso;
         this._dragEnd = dIso;

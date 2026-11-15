@@ -90,6 +90,7 @@ const PANEL_TABS = [
   { key: "month", label: "Månadskalender" },
   { key: "vacation", label: "Dagmarkeringar" },
   { key: "tts", label: "TTS" },
+  { key: "reminders", label: "Påminnelser" },
   { key: "generalSensors", label: "Sensorer" },
 ];
 
@@ -177,6 +178,16 @@ class FamilyPlannerPanel extends HTMLElement {
           tts: { tts_entity: ttsCfg.tts_entity || "", media_player: ttsCfg.media_player || "" },
           general: Array.isArray(value.general) ? value.general : [],
         };
+        // Bara med om det redan finns sparat - annars skulle varje sparning
+        // lägga till ett nytt toppnivåfält, vilket backend tolkar som en
+        // ändring utanför den egna profilen och då nekar ett barnkonto att
+        // spara (se _blocked_person_changes i __init__.py). Saknas = på.
+        if (value.todos && typeof value.todos === "object") {
+          this._data.todos = { show: value.todos.show !== false };
+        }
+        if (value.reminders && typeof value.reminders === "object") {
+          this._data.reminders = { minutes_before: Number(value.reminders.minutes_before) || 0 };
+        }
       }
     } catch (err) {
       // Inget sparat än - kör med tomt startläge.
@@ -531,6 +542,40 @@ class FamilyPlannerPanel extends HTMLElement {
     return select;
   }
 
+  // notify.*-tjänster (t.ex. mobile_app_annas_iphone) - från hass.services,
+  // så listan alltid stämmer med vad som faktiskt finns på instansen.
+  _mkNotifyPicker(value, onChange) {
+    const services = Object.keys((this._hass && this._hass.services && this._hass.services.notify) || {})
+      .filter((s) => s !== "send_message")
+      .sort();
+    const select = document.createElement("select");
+    select.style.flex = "1";
+    const noneOpt = document.createElement("option");
+    noneOpt.value = "";
+    noneOpt.textContent = "(inga påminnelser)";
+    select.appendChild(noneOpt);
+    let matched = !value;
+    services.forEach((svc) => {
+      const opt = document.createElement("option");
+      opt.value = svc;
+      opt.textContent = `notify.${svc}`;
+      if (svc === value) {
+        opt.selected = true;
+        matched = true;
+      }
+      select.appendChild(opt);
+    });
+    if (value && !matched) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = `notify.${value} (finns inte)`;
+      opt.selected = true;
+      select.appendChild(opt);
+    }
+    select.addEventListener("change", (ev) => onChange(ev.target.value));
+    return select;
+  }
+
   // Vuxen/barn-väljare - styr redigeringsrättigheter i både det här
   // panelen (se _canEditPersonRecord) och kortet (family-planner-card.js:
   // _isAdultUser/_canWriteToEntity). Defaultar till "adult", se
@@ -817,7 +862,18 @@ class FamilyPlannerPanel extends HTMLElement {
     card.appendChild(this._row([roleField]));
     card.appendChild(this._row([personEntityField]));
     card.appendChild(this._personEntitiesList(p, idx));
+    const notifyField = document.createElement("div");
+    notifyField.className = "fpp-field";
+    notifyField.innerHTML = `<div class="fpp-label">Notistjänst för påminnelser (valfri - se fliken Påminnelser)</div>`;
+    notifyField.appendChild(
+      this._mkNotifyPicker(p.notify_service, (val) => {
+        this._data.persons[idx] = { ...this._data.persons[idx], notify_service: val || null };
+        this._markDirty();
+      })
+    );
+
     card.appendChild(this._row([calField]));
+    card.appendChild(this._row([notifyField]));
     card.appendChild(this._row([userField]));
     card.appendChild(this._workCalendarsList(p, idx));
     card.appendChild(this._row([iconInput, colorInput]));
@@ -1269,6 +1325,16 @@ class FamilyPlannerPanel extends HTMLElement {
             <div class="fpp-row" id="fpp-tts-entity-row"></div>
             <div class="fpp-row" id="fpp-tts-player-row"></div>
           </div>
+          <div class="fpp-section fpp-tab-panel${this._activeTab === "reminders" ? " fpp-tab-panel-active" : ""}" data-tab-panel="reminders">
+            <div class="fpp-section-title">Påminnelser före kalenderhändelser</div>
+            <div class="fpp-row" id="fpp-reminders-row"></div>
+            <div class="fpp-label" style="margin-top:8px">
+              Skickas som mobilnotis till personen det gäller - välj notistjänst på
+              varje person under fliken Personer. Gäller personens egen kalender,
+              jobbkalendrar och delade kalendrar kopplade till personen.
+              Heldagshändelser och dolda händelser ger ingen påminnelse.
+            </div>
+          </div>
           <div class="fpp-section fpp-tab-panel${this._activeTab === "generalSensors" ? " fpp-tab-panel-active" : ""}" data-tab-panel="generalSensors">
             <div class="fpp-section-title">Allmänna sensorer (visas som rund ikon när "on")</div>
             <div id="fpp-general-list"></div>
@@ -1311,6 +1377,24 @@ class FamilyPlannerPanel extends HTMLElement {
     collapsedLabel.textContent = 'Starta "Idag"-sektionen ihopfälld';
     collapsedRow.appendChild(collapsedCheckbox);
     collapsedRow.appendChild(collapsedLabel);
+
+    // Family Todo-uppgifter i Idag-vyn (dagens + försenade, under varje
+    // tilldelad person). Påslaget som standard - visar bara något om
+    // Family Todo-integrationen är installerad.
+    const todosRow = document.createElement("div");
+    todosRow.className = "fpp-checkbox-row";
+    const todosCheckbox = document.createElement("input");
+    todosCheckbox.type = "checkbox";
+    todosCheckbox.checked = this._data.todos ? this._data.todos.show !== false : true;
+    todosCheckbox.addEventListener("change", (ev) => {
+      this._data.todos = { show: ev.target.checked };
+      this._markDirty();
+    });
+    const todosLabel = document.createElement("label");
+    todosLabel.textContent = 'Visa dagens uppgifter från Family Todo i "Idag" (under tilldelad person)';
+    todosRow.appendChild(todosCheckbox);
+    todosRow.appendChild(todosLabel);
+    collapsedRow.insertAdjacentElement("afterend", todosRow);
 
     // Nedräkningar
     const maxField = document.createElement("div");
@@ -1474,6 +1558,23 @@ class FamilyPlannerPanel extends HTMLElement {
       }, null, ["media_player"])
     );
     this.querySelector("#fpp-tts-player-row").appendChild(ttsPlayerField);
+
+    // Påminnelser (se reminders.py i integrationen)
+    const remindersField = document.createElement("div");
+    remindersField.className = "fpp-field";
+    remindersField.innerHTML = `<div class="fpp-label">Minuter före händelsen (0 = av)</div>`;
+    const remindersInput = document.createElement("input");
+    remindersInput.type = "number";
+    remindersInput.min = "0";
+    remindersInput.step = "5";
+    remindersInput.value = String((this._data.reminders && this._data.reminders.minutes_before) || 0);
+    remindersInput.addEventListener("change", (ev) => {
+      const minutes = Math.max(0, parseInt(ev.target.value, 10) || 0);
+      this._data.reminders = { minutes_before: minutes };
+      this._markDirty();
+    });
+    remindersField.appendChild(remindersInput);
+    this.querySelector("#fpp-reminders-row").appendChild(remindersField);
 
     // Allmänna sensorer
     const generalListEl = this.querySelector("#fpp-general-list");

@@ -202,8 +202,10 @@ händelse den dagen, i respektive `color`. Klicka på en dag för att se en
 lista med den dagens händelser (tid, titel och person). Ikon-nyckelorden
 (`icon_keywords`) matchas även mot händelsetitlarna i den listan.
 
-Data hämtas per synlig månad (och separat för innevarande vecka, till
-veckoschemat) och cachas i 5 minuter.
+Data hämtas per synlig månad och cachas i 5 minuter. Veckoschemat
+återanvänder samma hämtning (även när vecka och månad ligger i separata
+kort på samma sida), alla kalendrar hämtas parallellt, och en ändring som
+görs i kortet syns direkt i alla kort på sidan.
 
 ## Delade kalendrar (utan koppling till en person)
 
@@ -275,6 +277,39 @@ helst (t.ex. synkad från en samarbetsapp eller en delad Google-kalender).
 Flerdagarshändelser (t.ex. en hel "fre–sön hos pappa"-helg) räknas nu
 korrekt varje dag de pågår, inte bara på startdagen — samma fix gäller
 även semestermarkeringen och de vanliga kalendrarna.
+
+## Dagens uppgifter från Family Todo
+
+Har du [Family Todo](https://github.com/Cebbas/family_todo) installerat
+visas dagens och försenade obockade uppgifter (och delsteg med eget
+förfallodatum) direkt i **Idag**-vyn, under den person de är tilldelade -
+med en kryssruta för att bocka av dem på plats. Återkommande uppgifter
+rullar vidare precis som i Family Todo-panelen. Tilldelningen matchas
+(skiftlägesokänsligt) mot personens namn i sidopanelen eller namnet på
+den kopplade `person.*`-entiteten. Uppgifter utan tilldelning, eller
+tilldelade någon som inte finns på kortet, samlas under **Att göra idag**
+(visas inte på ett kort som är filtrerat till en enda person).
+
+Klockslag visas om uppgiften har ett, och försenade uppgifter märks
+**Försenad**. Inköpslistor tas aldrig med. Stäng av funktionen med
+kryssrutan under **Allmänt** i sidopanelen. Listan hämtas om varje minut
+och direkt efter en avbockning.
+
+## Påminnelser före kalenderhändelser
+
+Under fliken **Påminnelser** i sidopanelen anger du hur många minuter
+före en händelse en påminnelse ska skickas (0 = av), och under varje
+person vilken `notify.*`-tjänst (t.ex. mobilappen) personens påminnelser
+går till. Då får personen t.ex. "Om 30 min: Fotboll" som mobilnotis -
+även när ingen har dashboarden öppen, eftersom det körs i integrationen,
+inte i kortet.
+
+- En person påminns om händelser i sin egen kalender, sina jobbkalendrar
+  och delade kalendrar som är kopplade till personen. Delade kalendrar
+  utan personkoppling och borta-kalendrar ger inga påminnelser.
+- Heldagshändelser och händelser som dolts i vecko-/månadsvyn hoppas
+  över.
+- Varje tillfälle påminns om exakt en gång, även över omstarter.
 
 ## Notis-badge i headern
 
@@ -363,7 +398,9 @@ att ge något felmeddelande (till skillnad från när källan helt saknar
 skriv-/redigeringsstöd, vilket ger ett tydligt fel). Vill du garanterat
 få en riktig serie: skapa händelsen på nytt direkt i kortet med
 upprepning satt från början — nya händelser går alltid till
-cal_combiners egen kalender.
+cal_combiners egen kalender. (Kräver cal_combiner 0.0.21 eller senare
+för att redigering av källevent alls ska nå rätt händelse — äldre
+versioner skickade inte med källans riktiga id.)
 
 Kräver att `calendar_entity` pekar på en kalender med skrivstöd (t.ex.
 en lokal CalDAV-kalender). Går inte att skapa events på skrivskyddade

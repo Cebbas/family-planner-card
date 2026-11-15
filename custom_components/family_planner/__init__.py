@@ -34,6 +34,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
+from .reminders import FamilyPlannerReminders
 from .const import (
     CARD_FILENAME,
     DOMAIN,
@@ -50,6 +51,7 @@ from .const import (
 
 WWW_PATH = Path(__file__).parent / "www"
 HIDDEN_EVENTS_DATA_KEY = f"{DOMAIN}_hidden_events"
+REMINDERS_DATA_KEY = f"{DOMAIN}_reminders"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -58,6 +60,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[HIDDEN_EVENTS_DATA_KEY] = Store(
         hass, HIDDEN_EVENTS_STORAGE_VERSION, HIDDEN_EVENTS_STORAGE_KEY
     )
+
+    # Påminnelser före kalenderhändelser - se reminders.py.
+    reminders = FamilyPlannerReminders(
+        hass,
+        hass.data[DOMAIN].async_load,
+        hass.data[HIDDEN_EVENTS_DATA_KEY].async_load,
+    )
+    await reminders.async_start()
+    hass.data[REMINDERS_DATA_KEY] = reminders
+    entry.async_on_unload(reminders.async_stop)
 
     # Egna vyer istället för register_static_path/StaticPathConfig - ger
     # kontroll över svarshuvudena så vi kan slå av caching helt (se
@@ -119,6 +131,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Family Planner config entry."""
     hass.data.pop(DOMAIN, None)
     hass.data.pop(HIDDEN_EVENTS_DATA_KEY, None)
+    hass.data.pop(REMINDERS_DATA_KEY, None)
     frontend.async_remove_panel(hass, PANEL_URL_PATH)
     await _async_remove_lovelace_resource(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
     return True
@@ -316,6 +329,9 @@ async def ws_save_config(
         return
 
     await _get_store(hass).async_save(new_data)
+    reminders = hass.data.get(REMINDERS_DATA_KEY)
+    if reminders is not None:
+        reminders.mark_config_changed()
     connection.send_result(msg["id"])
 
 

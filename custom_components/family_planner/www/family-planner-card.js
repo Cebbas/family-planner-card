@@ -337,6 +337,52 @@ function fpcEsc(str) {
     .replace(/>/g, "&gt;");
 }
 
+// Delad hämtcache för kalenderhändelser - gemensam för ALLA kort-instanser
+// på sidan (t.ex. section: today/week/month som tre separata kort), så
+// samma kalender + datumfönster bara hämtas en gång per 5 minuter istället
+// för en gång per kort. Lagrar själva promise:n, så två kort som frågar
+// samtidigt delar på ett och samma anrop. Veckoschemat hämtar avsiktligt
+// samma fönster som månadskalendern (hela månadsrutnätet, se
+// _maybeFetchWeekEvents) för att träffa samma cache-post.
+const FPC_EVENTS_TTL_MS = 5 * 60 * 1000;
+const fpcEventsCache = new Map();
+// Ökas vid varje ändring som kortet självt gör (skapa/redigera/ta bort) -
+// varje instans jämför mot den, så även ANDRA kort på sidan hämtar om
+// direkt istället för att visa gammal data i upp till 5 minuter.
+let fpcEventsGeneration = 0;
+
+function fpcFetchCalendar(hass, entityId, start, end) {
+  const now = Date.now();
+  for (const [key, entry] of fpcEventsCache) {
+    if (now - entry.at >= FPC_EVENTS_TTL_MS) fpcEventsCache.delete(key);
+  }
+  const key = `${entityId}|${start.toISOString()}|${end.toISOString()}`;
+  const hit = fpcEventsCache.get(key);
+  if (hit) return hit.promise;
+  const promise = hass
+    .callApi(
+      "GET",
+      `calendars/${entityId}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`
+    )
+    .then((events) => (Array.isArray(events) ? events : []));
+  fpcEventsCache.set(key, { at: now, promise });
+  // Ett misslyckat anrop ska inte cachas - nästa försök ska fråga igen.
+  promise.catch(() => {
+    const current = fpcEventsCache.get(key);
+    if (current && current.promise === promise) fpcEventsCache.delete(key);
+  });
+  return promise;
+}
+
+function fpcInvalidateCalendarEvents() {
+  fpcEventsCache.clear();
+  fpcEventsGeneration += 1;
+}
+
+// Hur ofta kortet ritas om även när ingen av dess entiteter ändrats - för
+// det som beror på klockan (t.ex. "borta just nu", dagsbyte vid midnatt).
+const FPC_TIME_REFRESH_MS = 60 * 1000;
+
 class FamilyPlannerCard extends HTMLElement {
   constructor() {
     super();
@@ -483,10 +529,11 @@ class FamilyPlannerCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const prev = this._hass;
     this._hass = hass;
     if (!this._built) {
       this._render();
-    } else {
+    } else if (this._needsUpdate(prev, hass)) {
       this._update();
     }
     this._maybeFetchForecast();
@@ -494,6 +541,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeFetchWeekEvents();
     this._maybeFetchAwayStatus();
     this._maybeFetchHiddenEvents();
+    this._maybeFetchTodos();
     this._maybeLoadSharedConfig();
   }
 
@@ -534,6 +582,8 @@ class FamilyPlannerCard extends HTMLElement {
         icon_keywords: normalizeIconKeywords(data.icon_keywords),
         show_month_calendar: data.show_month_calendar !== false,
         vacation_keywords: Array.isArray(data.vacation_keywords) ? data.vacation_keywords : [],
+        // Family Todo i Idag-vyn - på som standard (se _maybeFetchTodos).
+        todos: { show: !(data.todos && data.todos.show === false) },
         tts:
           data.tts && data.tts.tts_entity && data.tts.media_player
             ? { tts_entity: data.tts.tts_entity, media_player: data.tts.media_player }
@@ -567,6 +617,121 @@ class FamilyPlannerCard extends HTMLElement {
     this._maybeFetchWeekEvents();
     this._maybeFetchForecast();
     this._maybeFetchAwayStatus();
+    this._maybeFetchTodos();
+  }
+
+  // Dagens (och försenade) uppgifter från Family Todo, via dess
+  // family_todo/agenda - samma data som Family Todo-panelens Veckan-flik,
+  // fast bara för idag. Visas under respektive tilldelad person i Idag-vyn
+  // och går att bocka av direkt (_completeTodo); oassignerade samlas i en
+  // egen rad. Är Family Todo inte installerat är kommandot okänt - då
+  // frågar vi bara igen var 5:e minut istället för varje minut, och visar
+  // ingenting.
+  async _maybeFetchTodos() {
+    const cfg = this._config;
+    if (!cfg || !this._hass || !this._showToday() || !(cfg.todos && cfg.todos.show)) return;
+    if (this._todosLoading) return;
+    const today = isoDate(new Date());
+    const cache = this._todosCache;
+    const ttl = cache && cache.unavailable ? 5 * 60 * 1000 : 60 * 1000;
+    if (cache && cache.day === today && Date.now() - cache.fetchedAt < ttl) return;
+
+    this._todosLoading = true;
+    try {
+      const result = await this._hass.callWS({
+        type: "family_todo/agenda",
+        start: today,
+        end: today,
+        include_overdue: true,
+        today,
+      });
+      this._todosCache = { day: today, fetchedAt: Date.now(), items: (result && result.items) || [] };
+    } catch (err) {
+      this._todosCache = { day: today, fetchedAt: Date.now(), items: [], unavailable: true };
+    } finally {
+      this._todosLoading = false;
+    }
+    this._update();
+  }
+
+  _todoItems() {
+    const cfg = this._config;
+    if (!cfg || !cfg.todos || !cfg.todos.show || !this._todosCache) return [];
+    return this._todosCache.items;
+  }
+
+  // Family Todo lagrar tilldelningen som ett namn (fritext, eller en
+  // person.*-entitets visningsnamn) - matcha det skiftlägesokänsligt mot
+  // personens namn i sidopanelen och dess kopplade person.*-entitet.
+  _todoMatchesPerson(p, assignee) {
+    if (!assignee) return false;
+    const wanted = String(assignee).trim().toLowerCase();
+    const names = [p.name, this._personDisplay(p).name];
+    const st = p.person_entity ? this._stateObj(p.person_entity) : undefined;
+    if (st && st.attributes) names.push(st.attributes.friendly_name);
+    return names.some((n) => n && String(n).trim().toLowerCase() === wanted);
+  }
+
+  _todosForPerson(p) {
+    return this._todoItems().filter((t) => this._todoMatchesPerson(p, t.assignee));
+  }
+
+  // Uppgifter som inte hör till någon person på kortet (ingen tilldelning,
+  // eller tilldelad någon som inte finns med). Visas inte alls på ett kort
+  // som är filtrerat till en enda person - där vore "alla andras" brus.
+  _unmatchedTodos() {
+    if (this._personFilter) return [];
+    const persons = this._config.persons;
+    return this._todoItems().filter((t) => !persons.some((p) => this._todoMatchesPerson(p, t.assignee)));
+  }
+
+  _renderTodoLine(t) {
+    const idx = this._todoItems().indexOf(t);
+    const time = t.due && t.due.length > 10 ? t.due.slice(11, 16) : "";
+    const dueLabel = t.overdue ? "Försenad" : time;
+    const title = t.parent_summary ? `${t.parent_summary} › ${t.summary}` : t.summary;
+    return `
+      <div class="fpc-todo-line${t.overdue ? " fpc-todo-overdue" : ""}">
+        <ha-icon class="fpc-todo-check" icon="mdi:checkbox-blank-outline" data-todo-idx="${idx}" title="Bocka av"></ha-icon>
+        <span class="fpc-todo-title">${t.recurrence ? "🔁 " : ""}${fpcEsc(title)}</span>
+        ${dueLabel ? `<span class="fpc-todo-due">${fpcEsc(dueLabel)}</span>` : ""}
+      </div>
+    `;
+  }
+
+  _bindTodoChecks(root) {
+    root.querySelectorAll(".fpc-todo-check[data-todo-idx]").forEach((el) => {
+      el.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        const t = this._todoItems()[Number(el.dataset.todoIdx)];
+        if (t) this._completeTodo(t);
+      });
+    });
+  }
+
+  // Bockar av via Family Todo:s egna kommandon - återkommande uppgifter
+  // rullar då vidare precis som i Family Todo-panelen. Tas bort ur vyn
+  // direkt (optimistiskt) och hämtas sedan om. Nekas det (t.ex. ett barn
+  // som bockar av i någon annans lista) visas felet under Idag.
+  async _completeTodo(t) {
+    if (!this._hass || this._todoCompleting) return;
+    this._todoCompleting = true;
+    try {
+      await this._hass.callWS(
+        t.kind === "subtask"
+          ? { type: "family_todo/complete_subtask", entry_id: t.entry_id, uid: t.uid, subtask_id: t.subtask_id }
+          : { type: "family_todo/complete_item", entry_id: t.entry_id, uid: t.uid }
+      );
+      if (this._todosCache) this._todosCache.items = this._todosCache.items.filter((x) => x !== t);
+      this._todoError = null;
+    } catch (err) {
+      this._todoError = (err && err.message) || "Kunde inte bocka av uppgiften.";
+    } finally {
+      this._todoCompleting = false;
+    }
+    if (this._todosCache) this._todosCache.fetchedAt = 0;
+    this._update();
+    this._maybeFetchTodos();
   }
 
   // "Dölj i vecko-/månadskalender" (se redigera-dialogen) är en lokal
@@ -764,19 +929,16 @@ class FamilyPlannerCard extends HTMLElement {
     return new Date(today.getFullYear(), today.getMonth(), today.getDate() - idx + this._weekViewOffset * 7);
   }
 
+  // Alla kalendrar hämtas parallellt (tidigare en i taget, så laddtiden
+  // växte med antalet kalendrar) och via den delade cachen ovan.
   async _fetchCalendarEvents(entityIds, start, end) {
+    const results = await Promise.all(
+      entityIds.map((entityId) => fpcFetchCalendar(this._hass, entityId, start, end).catch(() => []))
+    );
     const data = {};
-    for (const entityId of entityIds) {
-      try {
-        const events = await this._hass.callApi(
-          "GET",
-          `calendars/${entityId}?start=${encodeURIComponent(start.toISOString())}&end=${encodeURIComponent(end.toISOString())}`
-        );
-        data[entityId] = Array.isArray(events) ? events : [];
-      } catch (err) {
-        data[entityId] = [];
-      }
-    }
+    entityIds.forEach((entityId, i) => {
+      data[entityId] = results[i];
+    });
     return data;
   }
 
@@ -790,7 +952,11 @@ class FamilyPlannerCard extends HTMLElement {
     const month = this._calendarViewMonth.getMonth();
     const monthKey = `${year}-${month}`;
     const cache = this._monthEventsCache;
-    const fresh = cache && cache.key === monthKey && Date.now() - cache.fetchedAt < 5 * 60 * 1000;
+    const fresh =
+      cache &&
+      cache.key === monthKey &&
+      cache.generation === fpcEventsGeneration &&
+      Date.now() - cache.fetchedAt < FPC_EVENTS_TTL_MS;
     if (fresh || this._monthEventsLoading) return;
 
     this._monthEventsLoading = true;
@@ -800,8 +966,9 @@ class FamilyPlannerCard extends HTMLElement {
       gridEnd.setDate(gridEnd.getDate() + 42);
 
       const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
+      const generation = fpcEventsGeneration;
       const data = await this._fetchCalendarEvents(entityIds, gridStart, gridEnd);
-      this._monthEventsCache = { key: monthKey, fetchedAt: Date.now(), data };
+      this._monthEventsCache = { key: monthKey, fetchedAt: Date.now(), generation, data };
     } finally {
       this._monthEventsLoading = false;
     }
@@ -817,16 +984,28 @@ class FamilyPlannerCard extends HTMLElement {
     const monday = this._startOfViewedWeek();
     const weekKey = isoDate(monday);
     const cache = this._weekEventsCache;
-    const fresh = cache && cache.key === weekKey && Date.now() - cache.fetchedAt < 5 * 60 * 1000;
+    const fresh =
+      cache &&
+      cache.key === weekKey &&
+      cache.generation === fpcEventsGeneration &&
+      Date.now() - cache.fetchedAt < FPC_EVENTS_TTL_MS;
     if (fresh || this._weekEventsLoading) return;
 
     this._weekEventsLoading = true;
     try {
-      const end = new Date(monday);
-      end.setDate(end.getDate() + 7);
+      // Hämtar hela månadsrutnätet som veckan ligger i, inte bara själva
+      // veckan - exakt samma fönster som _maybeFetchMonthEvents använder, så
+      // vecka och månad delar en enda hämtning i den delade cachen
+      // (fpcFetchCalendar). Rutnätet (6 veckor från måndagen på/före den
+      // 1:a) täcker alltid hela veckan, och veckoschemat filtrerar ändå per
+      // dag (_eventsForDateFromSources), så det bredare fönstret syns inte.
+      const gridStart = startOfCalendarGrid(monday.getFullYear(), monday.getMonth());
+      const gridEnd = new Date(gridStart);
+      gridEnd.setDate(gridEnd.getDate() + 42);
       const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
-      const data = await this._fetchCalendarEvents(entityIds, monday, end);
-      this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), data };
+      const generation = fpcEventsGeneration;
+      const data = await this._fetchCalendarEvents(entityIds, gridStart, gridEnd);
+      this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), generation, data };
     } finally {
       this._weekEventsLoading = false;
     }
@@ -874,7 +1053,32 @@ class FamilyPlannerCard extends HTMLElement {
 
   _stateObj(entityId) {
     if (!this._hass || !entityId) return undefined;
+    // Kom ihåg vilka entiteter kortet faktiskt läser - se _needsUpdate.
+    if (this._watchedEntities) this._watchedEntities.add(entityId);
     return this._hass.states[entityId];
+  }
+
+  // HA skickar ett nytt hass-objekt vid VARJE tillståndsändring i hela
+  // installationen (ofta flera gånger i sekunden), men kortet bryr sig bara
+  // om en handfull entiteter. Att bygga om hela kortet (inklusive
+  // månadsrutnätet) varje gång kostade mycket på väggplattor och kunde
+  // få vyn att hoppa mitt i en scroll. Rita därför bara om när:
+  // - någon entitet kortet läste vid förra omritningen har ändrats
+  //   (HA byter ut state-objektet vid ändring, så en referensjämförelse
+  //   räcker - alla läsningar går via _stateObj, som samlar in dem),
+  // - inloggad användare eller språk ändrats,
+  // - dygnet bytt, eller
+  // - det gått en minut (för det som beror på klockan, t.ex. "borta just nu").
+  // Hämtningar (kalender, väder, ...) ritar om själva när de är klara.
+  _needsUpdate(prev, hass) {
+    if (!prev || !this._watchedEntities) return true;
+    if (prev.user !== hass.user || prev.language !== hass.language) return true;
+    if (Date.now() - (this._lastUpdateAt || 0) >= FPC_TIME_REFRESH_MS) return true;
+    if (isoDate(new Date()) !== this._lastUpdateDay) return true;
+    for (const entityId of this._watchedEntities) {
+      if (prev.states[entityId] !== hass.states[entityId]) return true;
+    }
+    return false;
   }
 
   _friendlyState(entityId, fallback) {
@@ -1092,6 +1296,22 @@ class FamilyPlannerCard extends HTMLElement {
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .fpc-person-state-picture { margin-top: 2px; }
+        .fpc-todo-list { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+        .fpc-todo-line {
+          display: flex; align-items: center; gap: 6px;
+          font-size: 0.88em; color: var(--primary-text-color); min-width: 0;
+        }
+        .fpc-todo-check {
+          --mdc-icon-size: 20px; cursor: pointer; flex: none;
+          color: var(--secondary-text-color);
+        }
+        .fpc-todo-check:hover { color: var(--primary-color); }
+        .fpc-todo-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fpc-todo-due { flex: none; font-size: 0.85em; color: var(--secondary-text-color); }
+        .fpc-todo-overdue .fpc-todo-due { color: var(--error-color, #db4437); font-weight: 500; }
+        .fpc-todo-shared { margin-top: 10px; }
+        .fpc-todo-shared-title { font-size: 0.82em; color: var(--secondary-text-color); margin-bottom: 2px; }
+        .fpc-todo-error { font-size: 0.82em; color: var(--error-color, #db4437); margin-top: 4px; }
         .fpc-state-picture { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; }
         .fpc-general-row {
           display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -1416,6 +1636,7 @@ class FamilyPlannerCard extends HTMLElement {
         </div>
         <div class="fpc-today${this._collapsed ? " collapsed" : ""}" id="fpc-today">
           <div id="fpc-persons"></div>
+          <div id="fpc-todos-shared"></div>
           <div class="fpc-general-row" id="fpc-general"></div>
         </div>
         ` : ""}
@@ -1685,6 +1906,10 @@ class FamilyPlannerCard extends HTMLElement {
   _update() {
     if (!this._config || !this._hass) return;
     const cfg = this._config;
+    // Fylls på av _stateObj under omritningen nedan - se _needsUpdate.
+    this._watchedEntities = new Set();
+    this._lastUpdateAt = Date.now();
+    this._lastUpdateDay = isoDate(new Date());
 
     const ttsBtn = this.shadowRoot.querySelector("#fpc-tts-btn");
     if (ttsBtn) ttsBtn.style.display = cfg.tts ? "" : "none";
@@ -1774,9 +1999,18 @@ class FamilyPlannerCard extends HTMLElement {
       personsEl.innerHTML = cfg.persons
         .map((p, idx) => {
           const personIconKeywords = this._iconKeywordsFor(p);
-          const lines = this._personTodayLines(p)
+          const todos = this._todosForPerson(p);
+          let todayLines = this._personTodayLines(p);
+          // "Inget planerat idag" stämmer inte om personen har uppgifter idag.
+          if (todos.length > 0 && todayLines.length === 1 && todayLines[0].entityId === null) {
+            todayLines = [];
+          }
+          const lines = todayLines
             .map((line) => this._renderTodayLine(line, personIconKeywords))
             .join("");
+          const todoHtml = todos.length > 0
+            ? `<div class="fpc-todo-list">${todos.map((t) => this._renderTodoLine(t)).join("")}</div>`
+            : "";
           const away = this._isPersonAwayNow(p);
           // Sista dagen av en borta-händelse räknas som ankomstdag, så
           // "borta"-toningen och "kommer hem idag" kan gälla samma dag.
@@ -1790,6 +2024,7 @@ class FamilyPlannerCard extends HTMLElement {
               <div class="fpc-person-info">
                 ${returningLine}
                 <div class="fpc-person-state-row">${lines}</div>
+                ${todoHtml}
               </div>
             </div>
           `;
@@ -1798,6 +2033,28 @@ class FamilyPlannerCard extends HTMLElement {
       personsEl.querySelectorAll(".fpc-person-identity-clickable[data-person-idx]").forEach((el) => {
         el.addEventListener("click", () => this._openProfile(Number(el.dataset.personIdx)));
       });
+      this._bindTodoChecks(personsEl);
+    }
+
+    // Family Todo-uppgifter utan (matchande) tilldelad person + ev. fel
+    // från en avbockning - se _maybeFetchTodos/_completeTodo.
+    const sharedTodosEl = this.shadowRoot.querySelector("#fpc-todos-shared");
+    if (sharedTodosEl) {
+      const unmatched = this._unmatchedTodos();
+      const errorHtml = this._todoError
+        ? `<div class="fpc-todo-error">${fpcEsc(this._todoError)}</div>`
+        : "";
+      sharedTodosEl.innerHTML =
+        unmatched.length > 0 || errorHtml
+          ? `
+            <div class="fpc-todo-shared">
+              ${unmatched.length > 0 ? `<div class="fpc-todo-shared-title">Att göra idag</div>` : ""}
+              <div class="fpc-todo-list">${unmatched.map((t) => this._renderTodoLine(t)).join("")}</div>
+              ${errorHtml}
+            </div>
+          `
+          : "";
+      this._bindTodoChecks(sharedTodosEl);
     }
 
     // Allmän rad - bara sensorer som är "on"
@@ -2157,6 +2414,8 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     this._creatingEventSaving = false;
+    // Tömmer även den delade cachen, så andra kort på sidan hämtar om.
+    fpcInvalidateCalendarEvents();
     this._monthEventsCache = null;
     this._weekEventsCache = null;
     this._creatingEvent = null;
@@ -2229,6 +2488,8 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     this._creatingEventSaving = false;
+    // Tömmer även den delade cachen, så andra kort på sidan hämtar om.
+    fpcInvalidateCalendarEvents();
     this._monthEventsCache = null;
     this._weekEventsCache = null;
     this._creatingEvent = null;
@@ -2262,6 +2523,8 @@ class FamilyPlannerCard extends HTMLElement {
     }
 
     this._creatingEventSaving = false;
+    // Tömmer även den delade cachen, så andra kort på sidan hämtar om.
+    fpcInvalidateCalendarEvents();
     this._monthEventsCache = null;
     this._weekEventsCache = null;
     this._creatingEvent = null;

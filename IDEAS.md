@@ -220,6 +220,8 @@ flera dagar i rad, så man inte missar att sensorn slutat uppdateras även
 när man inte har dashboarden öppen.
 
 ## Notiser och påminnelser för kommande händelser
+✅ Klar (0.5.0) som push via `notify.*` - se "Påminnelser före kalenderhändelser" längst ner.
+
 Skicka en riktig påminnelse (push via `notify.*` och/eller TTS) ett valbart
 antal minuter/timmar innan en händelse i kalendern börjar, t.ex. "Fotboll om
 30 min". Skiljer sig från "Notis via notify-tjänst om tom vecka" ovan (som
@@ -269,3 +271,30 @@ misslyckas.
 - Notis/highlight om en person-rad är tom flera dagar i rad (kan tyda på
   att sensorn slutat uppdateras) — visa en "!"-badge i UI:t istället för
   att bara logga det.
+
+## Uppgifter från Family Todo i Idag-vyn
+✅ Klar (0.5.0). Dagens + försenade obockade uppgifter/delsteg från
+Family Todo (`family_todo/agenda`) visas under tilldelad person, med
+kryssruta som bockar av via `family_todo/complete_item`/`complete_subtask`.
+Oassignerade samlas under "Att göra idag". Av/på i sidopanelen
+(`todos.show`, på som standard).
+
+Möjliga nästa steg: visa uppgifterna även i veckoschemat (per dag), och
+ta med dem i TTS-uppläsningen av dagen.
+
+## Påminnelser före kalenderhändelser
+✅ Klar (0.5.0) - se "Notiser och påminnelser för kommande händelser"
+ovan. Körs i integrationen (`reminders.py`), inte i kortet: global
+`reminders.minutes_before` + `notify_service` per person. Inte gjort än:
+TTS-påminnelse som alternativ till push, och olika framförhållning per
+person/kalender.
+
+## Prestanda
+✅ Klar (0.5.0).
+- Kortet ritas bara om när en entitet det faktiskt läser har ändrats
+  (samlas in via `_stateObj`), när dygnet byter eller en gång i minuten -
+  tidigare byggdes hela kortet inklusive månadsrutnätet om vid VARJE
+  tillståndsändring i hela HA.
+- Kalendrar hämtas parallellt, via en delad cache för alla kort-instanser
+  på sidan. Veckoschemat hämtar samma fönster som månadsvyn så de delar
+  en enda hämtning (halverar anropen i standardlayouten).

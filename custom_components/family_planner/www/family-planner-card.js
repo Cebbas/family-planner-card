@@ -382,6 +382,8 @@ function fpcInvalidateCalendarEvents() {
 // Hur ofta kortet ritas om även när ingen av dess entiteter ändrats - för
 // det som beror på klockan (t.ex. "borta just nu", dagsbyte vid midnatt).
 const FPC_TIME_REFRESH_MS = 60 * 1000;
+// Hur snart en kalender som inte svarade frågas igen (istället för 5 min).
+const FPC_FAILED_RETRY_MS = 60 * 1000;
 
 class FamilyPlannerCard extends HTMLElement {
   constructor() {
@@ -802,7 +804,7 @@ class FamilyPlannerCard extends HTMLElement {
       const end = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 2);
       const entityIds = [...new Set(awayCals.map((a) => a.entity))];
       const data = await this._fetchCalendarEvents(entityIds, start, end);
-      this._awayEventsCache = { fetchedAt: Date.now(), data };
+      this._awayEventsCache = { fetchedAt: this._cacheStamp(entityIds), data };
     } finally {
       this._awayLoading = false;
     }
@@ -931,15 +933,51 @@ class FamilyPlannerCard extends HTMLElement {
 
   // Alla kalendrar hämtas parallellt (tidigare en i taget, så laddtiden
   // växte med antalet kalendrar) och via den delade cachen ovan.
+  //
+  // En kalender som inte svarar ger en tom lista (resten av kortet ska
+  // fungera ändå), men noteras i _failedCalendars så kortet kan visa en
+  // varning (_renderCalendarWarning) istället för att se ut som en tom
+  // vecka, och så att den frågas om igen snart (_retryAt).
   async _fetchCalendarEvents(entityIds, start, end) {
     const results = await Promise.all(
-      entityIds.map((entityId) => fpcFetchCalendar(this._hass, entityId, start, end).catch(() => []))
+      entityIds.map((entityId) =>
+        fpcFetchCalendar(this._hass, entityId, start, end).then(
+          (events) => ({ ok: true, events }),
+          () => ({ ok: false, events: [] })
+        )
+      )
     );
+    if (!this._failedCalendars) this._failedCalendars = new Set();
     const data = {};
     entityIds.forEach((entityId, i) => {
-      data[entityId] = results[i];
+      data[entityId] = results[i].events;
+      if (results[i].ok) this._failedCalendars.delete(entityId);
+      else this._failedCalendars.add(entityId);
     });
     return data;
+  }
+
+  // fetchedAt att spara i en instans-cache: som vanligt, eller - om någon
+  // av kalendrarna misslyckades - bakdaterad så att cachen räknas som
+  // gammal redan om en minut istället för om fem.
+  _cacheStamp(entityIds) {
+    const failed = this._failedCalendars && entityIds.some((id) => this._failedCalendars.has(id));
+    return failed ? Date.now() - FPC_EVENTS_TTL_MS + FPC_FAILED_RETRY_MS : Date.now();
+  }
+
+  _renderCalendarWarning() {
+    const el = this.shadowRoot.querySelector("#fpc-cal-warning");
+    if (!el) return;
+    const failed = this._failedCalendars ? [...this._failedCalendars] : [];
+    if (failed.length === 0) {
+      el.style.display = "none";
+      el.innerHTML = "";
+      return;
+    }
+    const names = new Map(this._calendarSources().map((src) => [src.calendar_entity, src.name]));
+    const label = failed.map((id) => names.get(id) || id).join(", ");
+    el.style.display = "";
+    el.innerHTML = `<ha-icon icon="mdi:calendar-alert"></ha-icon><span>Kunde inte hämta ${fpcEsc(label)} - visas som tom tills den svarar igen.</span>`;
   }
 
   async _maybeFetchMonthEvents() {
@@ -968,7 +1006,7 @@ class FamilyPlannerCard extends HTMLElement {
       const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
       const generation = fpcEventsGeneration;
       const data = await this._fetchCalendarEvents(entityIds, gridStart, gridEnd);
-      this._monthEventsCache = { key: monthKey, fetchedAt: Date.now(), generation, data };
+      this._monthEventsCache = { key: monthKey, fetchedAt: this._cacheStamp(entityIds), generation, data };
     } finally {
       this._monthEventsLoading = false;
     }
@@ -1005,7 +1043,7 @@ class FamilyPlannerCard extends HTMLElement {
       const entityIds = [...new Set(sources.map((s) => s.calendar_entity))];
       const generation = fpcEventsGeneration;
       const data = await this._fetchCalendarEvents(entityIds, gridStart, gridEnd);
-      this._weekEventsCache = { key: weekKey, fetchedAt: Date.now(), generation, data };
+      this._weekEventsCache = { key: weekKey, fetchedAt: this._cacheStamp(entityIds), generation, data };
     } finally {
       this._weekEventsLoading = false;
     }
@@ -1296,6 +1334,13 @@ class FamilyPlannerCard extends HTMLElement {
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
         }
         .fpc-person-state-picture { margin-top: 2px; }
+        .fpc-cal-warning {
+          display: flex; align-items: center; gap: 6px; margin-top: 12px;
+          padding: 6px 10px; border-radius: 8px; font-size: 0.85em;
+          color: var(--warning-color, #b26a00);
+          background: rgba(255, 152, 0, 0.12);
+        }
+        .fpc-cal-warning ha-icon { --mdc-icon-size: 18px; flex: none; }
         .fpc-todo-list { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
         .fpc-todo-line {
           display: flex; align-items: center; gap: 6px;
@@ -1640,6 +1685,7 @@ class FamilyPlannerCard extends HTMLElement {
           <div class="fpc-general-row" id="fpc-general"></div>
         </div>
         ` : ""}
+        ${showWeek || showMonth ? `<div class="fpc-cal-warning" id="fpc-cal-warning" style="display:none"></div>` : ""}
         ${showWeek ? `
         <div class="fpc-week"${weekNoTopSpace ? ' style="margin-top:0;padding-top:0;border-top:none;"' : ""}>
           <div class="fpc-week-header-row">
@@ -1910,6 +1956,7 @@ class FamilyPlannerCard extends HTMLElement {
     this._watchedEntities = new Set();
     this._lastUpdateAt = Date.now();
     this._lastUpdateDay = isoDate(new Date());
+    this._renderCalendarWarning();
 
     const ttsBtn = this.shadowRoot.querySelector("#fpc-tts-btn");
     if (ttsBtn) ttsBtn.style.display = cfg.tts ? "" : "none";

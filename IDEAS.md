@@ -298,3 +298,17 @@ person/kalender.
 - Kalendrar hämtas parallellt, via en delad cache för alla kort-instanser
   på sidan. Veckoschemat hämtar samma fönster som månadsvyn så de delar
   en enda hämtning (halverar anropen i standardlayouten).
+
+## Robusthet (0.5.0)
+✅ Klar.
+- En kalender som inte svarar visas som en varningsrad ovanför
+  veckoschemat ("Kunde inte hämta Familj ...") istället för att se ut som
+  en tom vecka, och frågas om igen efter en minut istället för fem.
+- Kortet registreras som Lovelace-resurs via Lovelace egen resurssamling
+  (samma väg som Inställningar → Resurser) istället för att skriva
+  lagringsfilen direkt - kan inte längre krocka med Lovelace kopia i
+  minnet. YAML-läge loggar en uppmaning att lägga till resursen för hand.
+- Lås runt save_config och set_event_hidden, så samtidiga sparningar inte
+  skriver över varandra.
+- Testsvit för barn/vuxen-reglerna i save_config, låsen och
+  Lovelace-resursen.

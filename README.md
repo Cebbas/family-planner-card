@@ -202,7 +202,9 @@ händelse den dagen, i respektive `color`. Klicka på en dag för att se en
 lista med den dagens händelser (tid, titel och person). Ikon-nyckelorden
 (`icon_keywords`) matchas även mot händelsetitlarna i den listan.
 
-Data hämtas per synlig månad och cachas i 5 minuter. Veckoschemat
+Data hämtas per synlig månad och cachas i 5 minuter. Svarar en kalender
+inte visas en varningsrad ovanför veckoschemat, och den frågas om igen
+efter en minut. Veckoschemat
 återanvänder samma hämtning (även när vecka och månad ligger i separata
 kort på samma sida), alla kalendrar hämtas parallellt, och en ändring som
 görs i kortet syns direkt i alla kort på sidan.

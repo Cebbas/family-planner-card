@@ -21,6 +21,8 @@ only step needed:
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import uuid
 from pathlib import Path
 
@@ -49,9 +51,16 @@ from .const import (
     STORAGE_VERSION,
 )
 
+_LOGGER = logging.getLogger(__name__)
 WWW_PATH = Path(__file__).parent / "www"
 HIDDEN_EVENTS_DATA_KEY = f"{DOMAIN}_hidden_events"
 REMINDERS_DATA_KEY = f"{DOMAIN}_reminders"
+# Ett lås per lagring: save_config och set_event_hidden läser, ändrar och
+# skriver med en await emellan - två samtidiga anrop (två flikar, eller ett
+# snabbt dubbelklick) kunde annars läsa samma utgångsläge och den sista
+# skrivningen tyst kasta bort den första.
+CONFIG_LOCK_KEY = f"{DOMAIN}_config_lock"
+HIDDEN_EVENTS_LOCK_KEY = f"{DOMAIN}_hidden_events_lock"
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -60,6 +69,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[HIDDEN_EVENTS_DATA_KEY] = Store(
         hass, HIDDEN_EVENTS_STORAGE_VERSION, HIDDEN_EVENTS_STORAGE_KEY
     )
+
+    hass.data[CONFIG_LOCK_KEY] = asyncio.Lock()
+    hass.data[HIDDEN_EVENTS_LOCK_KEY] = asyncio.Lock()
 
     # Påminnelser före kalenderhändelser - se reminders.py.
     reminders = FamilyPlannerReminders(
@@ -132,6 +144,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.pop(DOMAIN, None)
     hass.data.pop(HIDDEN_EVENTS_DATA_KEY, None)
     hass.data.pop(REMINDERS_DATA_KEY, None)
+    hass.data.pop(CONFIG_LOCK_KEY, None)
+    hass.data.pop(HIDDEN_EVENTS_LOCK_KEY, None)
     frontend.async_remove_panel(hass, PANEL_URL_PATH)
     await _async_remove_lovelace_resource(hass, f"{STATIC_URL_BASE}/{CARD_FILENAME}")
     return True
@@ -141,20 +155,53 @@ _LOVELACE_RESOURCES_STORAGE_KEY = "lovelace_resources"
 _LOVELACE_RESOURCES_STORAGE_VERSION = 1
 
 
+def _lovelace_resources(hass: HomeAssistant):
+    """Lovelace egen resurssamling, eller None om den inte går att nå.
+
+    `hass.data["lovelace"]` är ett LovelaceData-objekt med `.resources` i
+    nyare HA (äldre versioner hade en dict) - båda hanteras. I storage-läge
+    (det vanliga) är det en ResourceStorageCollection med create/delete; i
+    YAML-läge en skrivskyddad ResourceYAMLCollection.
+    """
+    data = hass.data.get("lovelace")
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        return data.get("resources")
+    return getattr(data, "resources", None)
+
+
 async def _async_ensure_lovelace_resource(hass: HomeAssistant, url: str) -> None:
     """Register url as a Lovelace module resource, if not already present.
 
-    Skriver direkt till lovelace_resources-storaget istället för att gå
-    via lovelaces interna Python-API, som inte är en stabil dependency
-    att importera från en annan integration (samma avvägning som
-    RoomFlow gjorde när den läste samma store). Idempotent på url, så
-    detta är säkert att köra vid varje HA-start.
+    Går via Lovelace egen resurssamling (samma väg som Inställningar →
+    Instrumentpaneler → Resurser), så posten syns direkt utan omstart och
+    kan inte skrivas över av att Lovelace sparar sin egen kopia i minnet -
+    tidigare skrevs lagringsfilen direkt, vilket kunde krocka med just det.
+    Idempotent på url, så detta är säkert att köra vid varje HA-start.
 
-    OBS: Lovelace kan redan ha läst in sin resurslista i minnet innan
-    den här integrationen hinner köra, beroende på laddningsordning vid
-    en och samma HA-start. Den allra första gången en ny post läggs till
-    kan den därför synas först efter ytterligare en omstart.
+    Reserv om samlingen inte går att nå (bör inte hända, lovelace är ett
+    beroende i manifest.json): skriv lagringsfilen direkt som förut. I
+    YAML-läge går resurser inte att lägga till programmatiskt - då loggas
+    en uppmaning att lägga till den för hand.
     """
+    resources = _lovelace_resources(hass)
+    if resources is not None:
+        if not getattr(resources, "loaded", True):
+            await resources.async_load()
+            resources.loaded = True
+        if any(item.get("url") == url for item in resources.async_items() or []):
+            return
+        if hasattr(resources, "async_create_item"):
+            await resources.async_create_item({"res_type": "module", "url": url})
+        else:
+            _LOGGER.warning(
+                "Lovelace körs i YAML-läge - lägg till resursen %s (type: module) "
+                "under lovelace: resources: i configuration.yaml för att kortet ska laddas",
+                url,
+            )
+        return
+
     store: Store = Store(
         hass, _LOVELACE_RESOURCES_STORAGE_VERSION, _LOVELACE_RESOURCES_STORAGE_KEY
     )
@@ -168,6 +215,18 @@ async def _async_ensure_lovelace_resource(hass: HomeAssistant, url: str) -> None
 
 async def _async_remove_lovelace_resource(hass: HomeAssistant, url: str) -> None:
     """Undo _async_ensure_lovelace_resource."""
+    resources = _lovelace_resources(hass)
+    if resources is not None:
+        if not hasattr(resources, "async_delete_item"):
+            return  # YAML-läge - inget vi lagt till
+        if not getattr(resources, "loaded", True):
+            await resources.async_load()
+            resources.loaded = True
+        for item in list(resources.async_items() or []):
+            if item.get("url") == url:
+                await resources.async_delete_item(item["id"])
+        return
+
     store: Store = Store(
         hass, _LOVELACE_RESOURCES_STORAGE_VERSION, _LOVELACE_RESOURCES_STORAGE_KEY
     )
@@ -316,19 +375,19 @@ async def ws_save_config(
     own. Adults, and anyone without a matched login (e.g. a shared kiosk
     session), save as before with no restriction - see _is_adult().
     """
-    old_data = await _get_store(hass).async_load() or {}
     new_data = msg["value"]
     user_id = connection.user.id if connection.user else None
 
-    if not _is_adult(old_data, user_id) and _blocked_person_changes(old_data, new_data, user_id):
-        connection.send_error(
-            msg["id"],
-            "unauthorized",
-            "Bara vuxna kan ändra andra familjemedlemmars uppgifter.",
-        )
-        return
-
-    await _get_store(hass).async_save(new_data)
+    async with hass.data[CONFIG_LOCK_KEY]:
+        old_data = await _get_store(hass).async_load() or {}
+        if not _is_adult(old_data, user_id) and _blocked_person_changes(old_data, new_data, user_id):
+            connection.send_error(
+                msg["id"],
+                "unauthorized",
+                "Bara vuxna kan ändra andra familjemedlemmars uppgifter.",
+            )
+            return
+        await _get_store(hass).async_save(new_data)
     reminders = hass.data.get(REMINDERS_DATA_KEY)
     if reminders is not None:
         reminders.mark_config_changed()
@@ -365,12 +424,13 @@ async def ws_set_event_hidden(
 ) -> None:
     """Mark (or unmark) a single event as hidden from week/month view."""
     store = _get_hidden_events_store(hass)
-    data = await store.async_load()
-    keys = set((data or {}).get("keys", []))
     key = f"{msg['entity_id']}|{msg['uid']}"
-    if msg["hidden"]:
-        keys.add(key)
-    else:
-        keys.discard(key)
-    await store.async_save({"keys": sorted(keys)})
+    async with hass.data[HIDDEN_EVENTS_LOCK_KEY]:
+        data = await store.async_load()
+        keys = set((data or {}).get("keys", []))
+        if msg["hidden"]:
+            keys.add(key)
+        else:
+            keys.discard(key)
+        await store.async_save({"keys": sorted(keys)})
     connection.send_result(msg["id"], {"keys": sorted(keys)})

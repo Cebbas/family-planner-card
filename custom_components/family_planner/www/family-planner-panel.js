@@ -739,6 +739,30 @@ class FamilyPlannerPanel extends HTMLElement {
         this._render();
       });
       wrap.appendChild(this._row([matchInput, iconInput, imageInput, preview, removeBtn]));
+      // Matchningsflaggor - se keywordMatches/renderKeywordLabel i kortet.
+      const flag = (field, text, title) => {
+        const label = document.createElement("label");
+        label.className = "fpp-person-link-chip";
+        label.title = title;
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!kw[field];
+        cb.addEventListener("change", (ev) => {
+          const list = [...getList()];
+          list[kIdx] = { ...list[kIdx], [field]: ev.target.checked };
+          setList(list);
+          this._markDirty();
+        });
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(text));
+        return label;
+      };
+      const flags = this._row([
+        flag("whole_word", "Bara hela ord", "Matcha inte inuti andra ord, t.ex. så att \"bad\" inte träffar \"badminton\". Obs: träffar då inte heller sammansättningar som \"badhuset\"."),
+        flag("badge_only", "Visa bara ikonen", "Visa bara ikonen/bilden (texten som tooltip) i Idag-vyn, veckoschemat och månadsstaplarna."),
+      ]);
+      flags.classList.add("fpp-kw-flags");
+      wrap.appendChild(flags);
     });
     wrap.appendChild(
       this._addBtn("+ Lägg till nyckelord", () => {
@@ -1201,6 +1225,7 @@ class FamilyPlannerPanel extends HTMLElement {
           background: var(--card-background-color); color: var(--primary-text-color); font-size: 0.9em;
         }
         .fpp-row input[type="color"] { width: 36px; height: 36px; padding: 2px; }
+        .fpp-kw-flags { margin-top: -4px; margin-bottom: 12px; flex-wrap: wrap; }
         .fpp-checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
         .fpp-subtitle { font-weight: 500; margin: 16px 0 10px; font-size: 0.95em; }
         .fpp-subtitle:first-child { margin-top: 0; }

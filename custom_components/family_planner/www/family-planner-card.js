@@ -124,15 +124,37 @@ function personFilterKey(p) {
 // Returnerar hela den matchade nyckelordsposten (inte bara ikonen) så att
 // både `icon` och `image` finns kvar för renderKeywordBadge() att välja
 // mellan - ett nyckelord kan ha båda satta samtidigt.
+//
+// Med `whole_word: true` på posten krävs att ordet står för sig självt
+// (ingen bokstav/siffra direkt före eller efter), så "bad" inte matchar
+// inuti "badminton". Av som standard - svenska sammansättningar som
+// "fotbollsträning" ska fortfarande matcha "fotboll" om man inte aktivt
+// ber om hela ord.
+function keywordMatches(text, kw) {
+  if (!kw || !kw.match) return false;
+  const lower = String(text).toLowerCase();
+  const needle = String(kw.match).toLowerCase();
+  if (!kw.whole_word) return lower.includes(needle);
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").test(lower);
+}
+
 function matchIcon(text, keywords) {
   if (!text || !Array.isArray(keywords)) return null;
-  const lower = String(text).toLowerCase();
   for (const kw of keywords) {
-    if (kw.match && lower.includes(String(kw.match).toLowerCase())) {
-      return kw;
-    }
+    if (keywordMatches(text, kw)) return kw;
   }
   return null;
+}
+
+// cal_combiner bygger sina sammanslagna uid:n som "<källa>::<uid>", där
+// källan är antingen OWN_SOURCE_MARKER ("__own__", händelsen ligger i
+// cal_combiners egen kalender) eller källkalenderns entity_id. Returnerar
+// källans entity_id för en händelse som kommer från en källkalender, annars
+// null (egen händelse, eller en kalender som inte är cal_combiner alls).
+function calCombinerSourceEntity(uid) {
+  const m = /^(calendar\.[a-z0-9_]+)::/.exec(String(uid || ""));
+  return m ? m[1] : null;
 }
 
 const MONTH_NAMES = [
@@ -269,9 +291,15 @@ function isImagePath(str) {
 function normalizeIconKeywords(list) {
   return (Array.isArray(list) ? list : []).map((kw) => {
     if (kw.icon && !kw.image && isImagePath(kw.icon)) {
-      return { match: kw.match || "", icon: "", image: kw.icon };
+      return { match: kw.match || "", icon: "", image: kw.icon, whole_word: !!kw.whole_word, badge_only: !!kw.badge_only };
     }
-    return { match: kw.match || "", icon: kw.icon || "", image: kw.image || "" };
+    return {
+      match: kw.match || "",
+      icon: kw.icon || "",
+      image: kw.image || "",
+      whole_word: !!kw.whole_word,
+      badge_only: !!kw.badge_only,
+    };
   });
 }
 
@@ -294,6 +322,18 @@ function renderKeywordBadge(kw) {
   if (!kw) return "";
   if (kw.image) return `<img class="fpc-kw-image" src="${kw.image}" alt="" />`;
   return renderIconBadge(kw.icon);
+}
+
+// Badge + text för kompakta vyer (Idag-raden, veckoschemat, månadsstaplarna).
+// Har den matchade posten `badge_only: true` visas bara badgen, med texten
+// som tooltip - faller tillbaka till text om badgen blir tom (t.ex. ett
+// nyckelord utan ikon/bild satt), så inget försvinner helt.
+function renderKeywordLabel(kw, text) {
+  const badge = renderKeywordBadge(kw);
+  if (kw && kw.badge_only && badge) {
+    return `<span class="fpc-kw-only" title="${fpcEsc(text)}">${badge}</span>`;
+  }
+  return `${badge}${fpcEsc(text)}`;
 }
 
 // HA:s kalender-API (calendar/event/create|update) har inget bildfält -
@@ -1238,6 +1278,12 @@ class FamilyPlannerCard extends HTMLElement {
 
   // Person-specifika ikon-nyckelord vinner över globala (matchIcon tar
   // första träffen), så samma ord kan ge olika bild/ikon per person.
+  // Läsbart namn för en entitet (friendly_name), annars entity_id:t.
+  _entityLabel(entityId) {
+    const st = this._hass && this._hass.states ? this._hass.states[entityId] : null;
+    return (st && st.attributes && st.attributes.friendly_name) || entityId;
+  }
+
   _iconKeywordsFor(p) {
     const cfg = this._config;
     const personKw = (p && p.icon_keywords) || [];
@@ -1267,8 +1313,7 @@ class FamilyPlannerCard extends HTMLElement {
     if (picture) {
       return `<div class="fpc-person-state-line fpc-person-state-picture"><img class="fpc-state-picture" src="${picture}" alt="" /></div>`;
     }
-    const badge = renderKeywordBadge(matchIcon(line.text, keywords));
-    return `<div class="fpc-person-state-line">${badge}${fpcEsc(line.text)}</div>`;
+    return `<div class="fpc-person-state-line">${renderKeywordLabel(matchIcon(line.text, keywords), line.text)}</div>`;
   }
 
   _todayKey() {
@@ -1439,6 +1484,8 @@ class FamilyPlannerCard extends HTMLElement {
         .fpc-weather-week-temp { font-size: 0.78em; }
         .fpc-kw-icon { --mdc-icon-size: 18px; margin-right: 4px; vertical-align: -4px; }
         .fpc-kw-emoji { margin-right: 4px; }
+        .fpc-kw-only { cursor: default; }
+        .fpc-kw-only > .fpc-kw-icon, .fpc-kw-only > .fpc-kw-emoji, .fpc-kw-only > .fpc-kw-image { margin-right: 0; }
         .fpc-kw-image {
           width: 18px; height: 18px; border-radius: 50%; object-fit: cover;
           margin-right: 4px; vertical-align: -4px;
@@ -2205,8 +2252,10 @@ class FamilyPlannerCard extends HTMLElement {
         const html = events
           .map((ev) => {
             const summary = ev.summary || "(utan titel)";
-            const badge = renderKeywordBadge(ev.image ? { image: ev.image } : matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords));
-            const inner = `${badge}${fpcEsc(summary)}`;
+            const inner = renderKeywordLabel(
+              ev.image ? { image: ev.image } : matchIcon(summary, ev.sourceIconKeywords || cfg.icon_keywords),
+              summary
+            );
             if (!ev.uid) return inner;
             const key = `${ev.uid}|${dateIso}`;
             weekEventLookup.set(key, ev);
@@ -2845,12 +2894,12 @@ class FamilyPlannerCard extends HTMLElement {
           }
           return;
         }
-        const badge = renderKeywordBadge(ev.image ? { image: ev.image } : matchIcon(ev.summary, ev.iconKeywords));
+        const label = renderKeywordLabel(ev.image ? { image: ev.image } : matchIcon(ev.summary, ev.iconKeywords), ev.summary || "");
         const top = topOffset + ev.lane * MONTH_LANE_HEIGHT;
         const leftPct = (ev.startCol / 7) * 100;
         const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;
         weekHtml += `
-          <div class="fpc-month-event-bar" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${ev.color};">${badge}${fpcEsc(ev.summary)}</div>
+          <div class="fpc-month-event-bar" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${ev.color};">${label}</div>
         `;
       });
       weeks.push(weekHtml);
@@ -3123,6 +3172,9 @@ class FamilyPlannerCard extends HTMLElement {
       hidden: !!ev.hidden,
       uid: ev.uid,
       recurrenceId: ev.recurrence_id || null,
+      // Satt när händelsen kommer från en av cal_combiners källkalendrar
+      // (inte dess egen kalender) - se calCombinerSourceEntity().
+      combinerSource: calCombinerSourceEntity(ev.uid),
     };
   }
 
@@ -3273,8 +3325,23 @@ class FamilyPlannerCard extends HTMLElement {
           // satt), där en ny toppnivå-upprepning inte skulle vara
           // meningsfull. En vanlig, tidigare skapad enskild händelse kan
           // alltså i efterhand göras återkommande.
+          // Händelser från en av cal_combiners källkalendrar (uid
+          // "<källa>::...", inte "__own__::...") vidarebefordras vid
+          // redigering till källan, som ofta tyst struntar i ett rrule
+          // på en redan befintlig händelse - därför visas inget
+          // upprepningsfält alls för dem, bara en förklaring.
           ce.recurrenceId
             ? ""
+            : isEdit && ce.combinerSource
+            ? `
+        <div class="fpc-create-hint fpc-create-hint-source">
+          Upprepning kan inte läggas till här: händelsen kommer från
+          källkalendern <b>${fpcEsc(this._entityLabel(ce.combinerSource))}</b>,
+          som ofta inte stödjer att en befintlig händelse görs återkommande.
+          Skapa en ny händelse med upprepning istället, eller ändra serien i
+          källkalendern.
+        </div>
+        `
             : `
         <div class="fpc-create-field">
           <label class="fpc-create-field-label">Upprepning</label>
@@ -3305,13 +3372,7 @@ class FamilyPlannerCard extends HTMLElement {
             ${
               isEdit
                 ? `Gör om händelsen till en riktig återkommande serie med start från
-                   detta tillfälle, istället för enskilda händelser - men bara om
-                   händelsen redan hör hemma direkt på den här kalendern (t.ex.
-                   skapad här i kortet). Kommer händelsen ursprungligen från en
-                   annan, sammanslagen källa (en importerad/synkad kalender)
-                   skickas ändringen dit istället, och den källan kan tyst
-                   sakna stöd för att lägga till upprepning i efterhand - spara
-                   då om som en ny händelse med upprepning istället.`
+                   detta tillfälle, istället för enskilda händelser.`
                 : "Skapas som en riktig återkommande serie, inte enskilda händelser."
             }
             Stöds av bl.a. CalDAV och HA:s inbyggda lokala kalender - vissa

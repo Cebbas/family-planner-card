@@ -172,6 +172,16 @@ vinner om flera ord matchar samma text.
 Så om en persons "idag"-sensor har state `"Fotbollsträning 17:00"` visas
 ⚽ framför texten automatiskt, utan att du behöver ändra sensorn.
 
+Två valfria kryssrutor per nyckelord:
+
+- **Bara hela ord** — ordet måste stå för sig självt, så `bad` inte
+  träffar inuti `badminton`. Obs: då träffas inte heller svenska
+  sammansättningar (`fotboll` matchar inte `fotbollsträning`), därför är
+  det avstängt som standard.
+- **Visa bara ikonen** — ett kompakt läge: i Idag-raden, veckoschemat och
+  månadsstaplarna visas bara badgen, med texten som tooltip. Dagsdetaljen
+  i månadskalendern och personprofilen visar fortfarande hela texten.
+
 ### Person-specifika ikon-nyckelord
 
 Varje person i sidopanelen kan ha en egen lista med ikon-nyckelord som
@@ -380,6 +390,11 @@ i efterhand. Stöds av bl.a. CalDAV-kalendrar, cal_combiners egen
 kalender och HA:s inbyggda lokala kalender; en kalenderintegration utan
 stöd för upprepning ger ett tydligt felmeddelande vid sparande istället
 för att tyst misslyckas.
+
+Upprepningsfältet visas inte heller för händelser som kommer från en av
+cal_combiners *källkalendrar* (känns igen på händelsens uid) — där visas
+istället en förklaring, eftersom källan ofta tyst struntar i upprepning
+på en redan befintlig händelse (se nedan).
 
 Upprepningsfältet visas inte när du redigerar ett enstaka tillfälle i
 en redan befintlig serie (t.ex. en enskild vecka du öppnat via

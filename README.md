@@ -161,7 +161,9 @@ bilden vinner då om vilken badge som visas. Ikon-fältet kan vara:
 
 Bild-fältet är en bild-URL eller lokal sökväg, t.ex.
 `https://example.com/fotboll.png` eller `/local/icons/fotboll.png` —
-visas som en liten rund bild. Lokala bilder lägger du precis som kortet
+visas som en liten rund bild. Av säkerhetsskäl godtas bara `https://`-
+adresser och HA:s egna sökvägar (`/local/...`, `/api/...`) - en vanlig
+`http://`-adress visas inte. Lokala bilder lägger du precis som kortet
 självt i `/config/www/` och pekar på dem som `/local/dinbild.png`.
 
 Kortet söker efter ordet i texten (skiftlägesokänsligt, substräng) och

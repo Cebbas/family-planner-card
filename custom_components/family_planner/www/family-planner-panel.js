@@ -30,6 +30,23 @@ function fpcEsc(str) {
     .replace(/>/g, "&gt;");
 }
 
+// Bild-URL som får hamna i ett src-attribut: bara https:// eller HA:s egna
+// sökvägar (/local/, /api/ - t.ex. /api/image/serve/... och entity_picture
+// som /api/image_proxy/...) och /hacsfiles/. Allt annat (javascript:,
+// data:, relativa sökvägar m.m.) ger "" och renderas inte alls. Resultatet
+// är dessutom HTML-escapat, så ett citattecken i URL:en kan inte bryta sig
+// ut ur attributet.
+function fppSafeImageUrl(url) {
+  const u = String(url || "").trim();
+  if (/^https:\/\//i.test(u) || /^\/(local|api|hacsfiles)\//.test(u)) return fpcEsc(u);
+  return "";
+}
+
+function fppImgTag(cls, url) {
+  const src = fppSafeImageUrl(url);
+  return src ? `<img class="${cls}" src="${src}" alt="" />` : "";
+}
+
 function isImagePath(str) {
   if (!str) return false;
   if (/^https?:\/\//i.test(str)) return true;
@@ -47,12 +64,12 @@ function personMatchKey(p) {
 function renderIconBadge(icon) {
   if (!icon) return "";
   if (icon.startsWith("mdi:")) {
-    return `<ha-icon class="fpp-kw-icon" icon="${icon}"></ha-icon>`;
+    return `<ha-icon class="fpp-kw-icon" icon="${fpcEsc(icon)}"></ha-icon>`;
   }
   if (isImagePath(icon)) {
-    return `<img class="fpp-kw-image" src="${icon}" alt="" />`;
+    return fppImgTag("fpp-kw-image", icon);
   }
-  return `<span class="fpp-kw-emoji">${icon}</span>`;
+  return `<span class="fpp-kw-emoji">${fpcEsc(icon)}</span>`;
 }
 
 // Förhandsvisning för ett nyckelord som kan ha både `icon` och `image`
@@ -60,7 +77,7 @@ function renderIconBadge(icon) {
 // renderKeywordBadge i family-planner-card.js.
 function renderKeywordBadge(kw) {
   if (!kw) return "";
-  if (kw.image) return `<img class="fpp-kw-image" src="${kw.image}" alt="" />`;
+  if (kw.image) return fppImgTag("fpp-kw-image", kw.image) || renderIconBadge(kw.icon);
   return renderIconBadge(kw.icon);
 }
 

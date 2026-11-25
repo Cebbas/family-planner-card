@@ -306,12 +306,12 @@ function normalizeIconKeywords(list) {
 function renderIconBadge(icon) {
   if (!icon) return "";
   if (icon.startsWith("mdi:")) {
-    return `<ha-icon class="fpc-kw-icon" icon="${icon}"></ha-icon>`;
+    return `<ha-icon class="fpc-kw-icon" icon="${fpcEsc(icon)}"></ha-icon>`;
   }
   if (isImagePath(icon)) {
-    return `<img class="fpc-kw-image" src="${icon}" alt="" />`;
+    return fpcImgTag("fpc-kw-image", icon);
   }
-  return `<span class="fpc-kw-emoji">${icon}</span>`;
+  return `<span class="fpc-kw-emoji">${fpcEsc(icon)}</span>`;
 }
 
 // Badge för en matchad ikon-nyckelordspost (se matchIcon) - ett nyckelord
@@ -320,7 +320,7 @@ function renderIconBadge(icon) {
 // genom att jobba med hela posten.
 function renderKeywordBadge(kw) {
   if (!kw) return "";
-  if (kw.image) return `<img class="fpc-kw-image" src="${kw.image}" alt="" />`;
+  if (kw.image) return fpcImgTag("fpc-kw-image", kw.image) || renderIconBadge(kw.icon);
   return renderIconBadge(kw.icon);
 }
 
@@ -350,7 +350,12 @@ function splitEventImage(description) {
   if (!description) return { description: "", image: "" };
   const m = FPC_IMAGE_MARKER_RE.exec(description);
   if (!m) return { description, image: "" };
-  return { description: description.slice(0, m.index), image: m[1] };
+  // Beskrivningen kommer från vilken kalenderkälla som helst (en delad
+  // Google-kalender, en ICS-länk...), så bara uppladdade bilder
+  // (/api/image/serve/...) och https-länkar godtas - resten ignoreras.
+  const url = m[1];
+  const ok = /^https:\/\//i.test(url) || /^\/api\/image\/serve\//.test(url);
+  return { description: description.slice(0, m.index), image: ok ? url : "" };
 }
 
 function joinEventImage(description, image) {
@@ -375,6 +380,23 @@ function fpcEsc(str) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+// Bild-URL som får hamna i ett src-attribut: bara https:// eller HA:s egna
+// sökvägar (/local/, /api/ - t.ex. /api/image/serve/... och entity_picture
+// som /api/image_proxy/...) och /hacsfiles/. Allt annat (javascript:,
+// data:, relativa sökvägar m.m.) ger "" och renderas inte alls. Resultatet
+// är dessutom HTML-escapat, så ett citattecken i URL:en kan inte bryta sig
+// ut ur attributet.
+function fpcSafeImageUrl(url) {
+  const u = String(url || "").trim();
+  if (/^https:\/\//i.test(u) || /^\/(local|api|hacsfiles)\//.test(u)) return fpcEsc(u);
+  return "";
+}
+
+function fpcImgTag(cls, url) {
+  const src = fpcSafeImageUrl(url);
+  return src ? `<img class="${cls}" src="${src}" alt="" />` : "";
 }
 
 // Delad hämtcache för kalenderhändelser - gemensam för ALLA kort-instanser
@@ -1254,11 +1276,10 @@ class FamilyPlannerCard extends HTMLElement {
   _personAvatarHtml(p) {
     const color = p.color || "var(--primary-color)";
     const icon = p.icon || "mdi:account";
-    const { picture } = this._personDisplay(p);
-    const inner = picture
-      ? `<img class="fpc-avatar-img" src="${picture}" alt="" />`
-      : `<ha-icon icon="${icon}"></ha-icon>`;
-    return `<div class="fpc-avatar" style="background:${picture ? "transparent" : color}">${inner}</div>`;
+    const pictureTag = fpcImgTag("fpc-avatar-img", this._personDisplay(p).picture);
+    const picture = !!pictureTag;
+    const inner = pictureTag || `<ha-icon icon="${fpcEsc(icon)}"></ha-icon>`;
+    return `<div class="fpc-avatar" style="background:${picture ? "transparent" : fpcEsc(color)}">${inner}</div>`;
   }
 
   // Avatar ovanför namn, som en liten vertikal identitets-block - samma
@@ -1309,9 +1330,9 @@ class FamilyPlannerCard extends HTMLElement {
   // sak. Annars: ikon-nyckelord-badge (om något matchar) + texten som förut.
   _renderTodayLine(line, keywords) {
     const st = this._stateObj(line.entityId);
-    const picture = st && st.attributes && st.attributes.entity_picture;
-    if (picture) {
-      return `<div class="fpc-person-state-line fpc-person-state-picture"><img class="fpc-state-picture" src="${picture}" alt="" /></div>`;
+    const pictureTag = fpcImgTag("fpc-state-picture", st && st.attributes && st.attributes.entity_picture);
+    if (pictureTag) {
+      return `<div class="fpc-person-state-line fpc-person-state-picture">${pictureTag}</div>`;
     }
     return `<div class="fpc-person-state-line">${renderKeywordLabel(matchIcon(line.text, keywords), line.text)}</div>`;
   }
@@ -2049,7 +2070,7 @@ class FamilyPlannerCard extends HTMLElement {
               <div class="fpc-cd-chip${it.pinned ? " fpc-cd-pinned" : ""}">
                 ${
                   it.picture
-                    ? `<img class="fpc-cd-picture" src="${it.picture}" alt="" />`
+                    ? fpcImgTag("fpc-cd-picture", it.picture)
                     : `<div class="fpc-cd-icon"><ha-icon icon="${it.icon || "mdi:calendar-star"}"></ha-icon></div>`
                 }
                 <div class="fpc-cd-name">${fpcEsc(it.displayName)}</div>
@@ -2178,10 +2199,9 @@ class FamilyPlannerCard extends HTMLElement {
             const icon = g.icon || "mdi:bell";
             const label = g.name || g.entity;
             const st = this._stateObj(g.entity);
-            const picture = st && st.attributes && st.attributes.entity_picture;
-            const circleInner = picture
-              ? `<img class="fpc-general-circle-img" src="${picture}" alt="" />`
-              : `<ha-icon icon="${icon}"></ha-icon>`;
+            const pictureTag = fpcImgTag("fpc-general-circle-img", st && st.attributes && st.attributes.entity_picture);
+            const picture = !!pictureTag;
+            const circleInner = pictureTag || `<ha-icon icon="${fpcEsc(icon)}"></ha-icon>`;
             return `
               <div class="fpc-general-badge" title="${fpcEsc(label)}">
                 <div class="fpc-general-circle"${picture ? ' style="background:transparent"' : ""}>
@@ -2655,7 +2675,7 @@ class FamilyPlannerCard extends HTMLElement {
           const active = !this._hiddenSources.has(src.key);
           return `
             <div class="fpc-filter-chip${active ? " fpc-filter-active" : ""}" data-source-key="${fpcEsc(src.key)}">
-              <div class="fpc-filter-dot" style="background:${src.color}"></div>
+              <div class="fpc-filter-dot" style="background:${fpcEsc(src.color)}"></div>
               ${fpcEsc(src.name)}
             </div>
           `;
@@ -2771,7 +2791,7 @@ class FamilyPlannerCard extends HTMLElement {
           .filter(Boolean)
           .join(" ");
         const styleParts = [`min-height:${minHeight}px`];
-        if (vacationColor && !isToday) styleParts.push(`background:${vacationColor}`);
+        if (vacationColor && !isToday) styleParts.push(`background:${fpcEsc(vacationColor)}`);
         cellsHtml += `
           <div class="${classes}" data-date="${dIso}" style="${styleParts.join("; ")};">
             <div class="fpc-month-daynum">${d.getDate()}</div>
@@ -2899,7 +2919,7 @@ class FamilyPlannerCard extends HTMLElement {
         const leftPct = (ev.startCol / 7) * 100;
         const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;
         weekHtml += `
-          <div class="fpc-month-event-bar" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${ev.color};">${label}</div>
+          <div class="fpc-month-event-bar" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${fpcEsc(ev.color)};">${label}</div>
         `;
       });
       weeks.push(weekHtml);
@@ -2934,7 +2954,7 @@ class FamilyPlannerCard extends HTMLElement {
         const leftPct = (ev.startCol / 7) * 100;
         const widthPct = ((ev.endCol - ev.startCol + 1) / 7) * 100;
         weekHtml += `
-          <div class="fpc-month-away-line" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${ev.color};" title="${fpcEsc(ev.summary)}"></div>
+          <div class="fpc-month-away-line" style="left:calc(${leftPct}% + 1px); width:calc(${widthPct}% - 2px); top:${top}px; background:${fpcEsc(ev.color)};" title="${fpcEsc(ev.summary)}"></div>
         `;
       });
       weeks.push(weekHtml);
@@ -2979,7 +2999,7 @@ class FamilyPlannerCard extends HTMLElement {
           const hiddenHtml = ev.hidden ? ` <span class="fpc-month-event-hidden-tag">Dold i vecka/månad</span>` : "";
           return `
             <div class="fpc-month-event${editable ? " fpc-month-event-editable" : ""}${ev.hidden ? " fpc-month-event-hidden" : ""}" data-idx="${i}">
-              <div class="fpc-month-event-dot" style="background:${ev.sourceColor}"></div>
+              <div class="fpc-month-event-dot" style="background:${fpcEsc(ev.sourceColor)}"></div>
               ${time}
               <div>${badge}${fpcEsc(summary)} <span style="opacity:0.7">– ${fpcEsc(ev.sourceName)}</span>${locationHtml}${hiddenHtml}</div>
             </div>
@@ -3295,7 +3315,7 @@ class FamilyPlannerCard extends HTMLElement {
         <div class="fpc-create-field">
           <label class="fpc-create-field-label">Bild</label>
           <div class="fpc-create-image-picker">
-            ${ce.image ? `<img class="fpc-create-image-thumb" src="${fpcEsc(ce.image)}" alt="" />` : ""}
+            ${ce.image ? `${fpcImgTag("fpc-create-image-thumb", ce.image)}` : ""}
             <button type="button" class="fpc-create-image-btn" id="fpc-ce-image-btn" ${this._creatingEventImageUploading ? "disabled" : ""}>
               ${this._creatingEventImageUploading ? "Laddar upp…" : ce.image ? "Byt bild" : "Lägg till bild"}
             </button>

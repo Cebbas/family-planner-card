@@ -30,6 +30,23 @@ function fpcEsc(str) {
     .replace(/>/g, "&gt;");
 }
 
+// Bild-URL som får hamna i ett src-attribut: bara https:// eller HA:s egna
+// sökvägar (/local/, /api/ - t.ex. /api/image/serve/... och entity_picture
+// som /api/image_proxy/...) och /hacsfiles/. Allt annat (javascript:,
+// data:, relativa sökvägar m.m.) ger "" och renderas inte alls. Resultatet
+// är dessutom HTML-escapat, så ett citattecken i URL:en kan inte bryta sig
+// ut ur attributet.
+function fppSafeImageUrl(url) {
+  const u = String(url || "").trim();
+  if (/^https:\/\//i.test(u) || /^\/(local|api|hacsfiles)\//.test(u)) return fpcEsc(u);
+  return "";
+}
+
+function fppImgTag(cls, url) {
+  const src = fppSafeImageUrl(url);
+  return src ? `<img class="${cls}" src="${src}" alt="" />` : "";
+}
+
 function isImagePath(str) {
   if (!str) return false;
   if (/^https?:\/\//i.test(str)) return true;
@@ -47,12 +64,12 @@ function personMatchKey(p) {
 function renderIconBadge(icon) {
   if (!icon) return "";
   if (icon.startsWith("mdi:")) {
-    return `<ha-icon class="fpp-kw-icon" icon="${icon}"></ha-icon>`;
+    return `<ha-icon class="fpp-kw-icon" icon="${fpcEsc(icon)}"></ha-icon>`;
   }
   if (isImagePath(icon)) {
-    return `<img class="fpp-kw-image" src="${icon}" alt="" />`;
+    return fppImgTag("fpp-kw-image", icon);
   }
-  return `<span class="fpp-kw-emoji">${icon}</span>`;
+  return `<span class="fpp-kw-emoji">${fpcEsc(icon)}</span>`;
 }
 
 // Förhandsvisning för ett nyckelord som kan ha både `icon` och `image`
@@ -60,7 +77,7 @@ function renderIconBadge(icon) {
 // renderKeywordBadge i family-planner-card.js.
 function renderKeywordBadge(kw) {
   if (!kw) return "";
-  if (kw.image) return `<img class="fpp-kw-image" src="${kw.image}" alt="" />`;
+  if (kw.image) return fppImgTag("fpp-kw-image", kw.image) || renderIconBadge(kw.icon);
   return renderIconBadge(kw.icon);
 }
 
@@ -739,6 +756,30 @@ class FamilyPlannerPanel extends HTMLElement {
         this._render();
       });
       wrap.appendChild(this._row([matchInput, iconInput, imageInput, preview, removeBtn]));
+      // Matchningsflaggor - se keywordMatches/renderKeywordLabel i kortet.
+      const flag = (field, text, title) => {
+        const label = document.createElement("label");
+        label.className = "fpp-person-link-chip";
+        label.title = title;
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = !!kw[field];
+        cb.addEventListener("change", (ev) => {
+          const list = [...getList()];
+          list[kIdx] = { ...list[kIdx], [field]: ev.target.checked };
+          setList(list);
+          this._markDirty();
+        });
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(text));
+        return label;
+      };
+      const flags = this._row([
+        flag("whole_word", "Bara hela ord", "Matcha inte inuti andra ord, t.ex. så att \"bad\" inte träffar \"badminton\". Obs: träffar då inte heller sammansättningar som \"badhuset\"."),
+        flag("badge_only", "Visa bara ikonen", "Visa bara ikonen/bilden (texten som tooltip) i Idag-vyn, veckoschemat och månadsstaplarna."),
+      ]);
+      flags.classList.add("fpp-kw-flags");
+      wrap.appendChild(flags);
     });
     wrap.appendChild(
       this._addBtn("+ Lägg till nyckelord", () => {
@@ -1201,6 +1242,7 @@ class FamilyPlannerPanel extends HTMLElement {
           background: var(--card-background-color); color: var(--primary-text-color); font-size: 0.9em;
         }
         .fpp-row input[type="color"] { width: 36px; height: 36px; padding: 2px; }
+        .fpp-kw-flags { margin-top: -4px; margin-bottom: 12px; flex-wrap: wrap; }
         .fpp-checkbox-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
         .fpp-subtitle { font-weight: 500; margin: 16px 0 10px; font-size: 0.95em; }
         .fpp-subtitle:first-child { margin-top: 0; }

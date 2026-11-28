@@ -161,7 +161,9 @@ bilden vinner då om vilken badge som visas. Ikon-fältet kan vara:
 
 Bild-fältet är en bild-URL eller lokal sökväg, t.ex.
 `https://example.com/fotboll.png` eller `/local/icons/fotboll.png` —
-visas som en liten rund bild. Lokala bilder lägger du precis som kortet
+visas som en liten rund bild. Av säkerhetsskäl godtas bara `https://`-
+adresser och HA:s egna sökvägar (`/local/...`, `/api/...`) - en vanlig
+`http://`-adress visas inte. Lokala bilder lägger du precis som kortet
 självt i `/config/www/` och pekar på dem som `/local/dinbild.png`.
 
 Kortet söker efter ordet i texten (skiftlägesokänsligt, substräng) och
@@ -171,6 +173,16 @@ vinner om flera ord matchar samma text.
 
 Så om en persons "idag"-sensor har state `"Fotbollsträning 17:00"` visas
 ⚽ framför texten automatiskt, utan att du behöver ändra sensorn.
+
+Två valfria kryssrutor per nyckelord:
+
+- **Bara hela ord** — ordet måste stå för sig självt, så `bad` inte
+  träffar inuti `badminton`. Obs: då träffas inte heller svenska
+  sammansättningar (`fotboll` matchar inte `fotbollsträning`), därför är
+  det avstängt som standard.
+- **Visa bara ikonen** — ett kompakt läge: i Idag-raden, veckoschemat och
+  månadsstaplarna visas bara badgen, med texten som tooltip. Dagsdetaljen
+  i månadskalendern och personprofilen visar fortfarande hela texten.
 
 ### Person-specifika ikon-nyckelord
 
@@ -380,6 +392,11 @@ i efterhand. Stöds av bl.a. CalDAV-kalendrar, cal_combiners egen
 kalender och HA:s inbyggda lokala kalender; en kalenderintegration utan
 stöd för upprepning ger ett tydligt felmeddelande vid sparande istället
 för att tyst misslyckas.
+
+Upprepningsfältet visas inte heller för händelser som kommer från en av
+cal_combiners *källkalendrar* (känns igen på händelsens uid) — där visas
+istället en förklaring, eftersom källan ofta tyst struntar i upprepning
+på en redan befintlig händelse (se nedan).
 
 Upprepningsfältet visas inte när du redigerar ett enstaka tillfälle i
 en redan befintlig serie (t.ex. en enskild vecka du öppnat via

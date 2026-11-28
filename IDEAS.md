@@ -104,9 +104,8 @@ vara emoji, `mdi:`-ikon, eller en bild-URL/lokal sökväg (visas som en
 liten rund bild). Fungerar i "Idag"-raden, veckoschemats celler, och
 månadskalenderns dagsdetalj-lista, med live-förhandsgranskning i editorn.
 
-Kvar att göra om man vill gå vidare: matcha på hela ord istället för
-substräng (undviker t.ex. att "bad" matchar inuti "badminton"), och
-möjlighet att visa *bara* badgen utan text som ett kompakt läge.
+✅ Klar (0.5.1): kryssrutorna "Bara hela ord" (`whole_word`) och "Visa
+bara ikonen" (`badge_only`) per nyckelord i sidopanelen.
 
 ## Förhandsgranskning av utfallet i konfigurationsstegen
 ✅ Klar (för Idag-sensorer, nedräkningar, allmän rad). Varje entitetsväljare
@@ -199,6 +198,10 @@ istället. Möjlig framtida förbättring: låta kortet läsa av
 merge-uid-prefixet (`__own__::` i cal_combiner) för att visa en tydlig
 varning eller dölja fältet helt för källevent, istället för att bara
 förklara det i text.
+
+✅ Klar (0.5.1): kortet läser cal_combiners uid (`<källa>::...` vs
+`__own__::...`) och visar inget upprepningsfält alls för källevent, bara
+en förklaring som namnger källkalendern.
 
 ## Flerspråksstöd
 Likt pollen pump-integrationen: göra UI-texterna (Idag, Veckoschema,
